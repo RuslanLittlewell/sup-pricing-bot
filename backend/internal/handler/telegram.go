@@ -512,7 +512,7 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		[]inlineButton{button("Да", "candidate:yes"), button("Нет", "candidate:no")},
 		[]inlineButton{button("Назад", "menu:back")},
 	)
-	caption := fmt.Sprintf("Нашёл этот блок с ценой %.2f %s.\nЭто правильная цена?", price, currency)
+	caption := fmt.Sprintf("Нашёл этот блок с ценой %s.\nЭто правильная цена?", formatMoney(price))
 	if err := tg.SendPhotoWithMarkup(chatID, screenshot, caption, markup); err != nil {
 		log.Error().Err(err).Msg("failed to send price screenshot")
 		_ = tg.SendMessageWithMarkup(chatID, caption, markup)
@@ -557,7 +557,7 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		[]inlineButton{button("Посмотреть мои трекеры", "menu:list")},
 		[]inlineButton{button("Назад", "menu:back")},
 	)
-	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf("✅ Трекер создан!\n\n%s\n💰 %.2f %s\nПроверка каждые 3 часа.\nID: <code>%s</code>", state.URL, state.InitialPrice, state.Currency, trackerID[:8]), markup)
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf("✅ Трекер создан!\n\n%s\n%s\nПроверка каждые 3 часа.\nID: <code>%s</code>", state.URL, formatMoney(state.InitialPrice), trackerID[:8]), markup)
 }
 
 func clearTelegramState(ctx context.Context, pool *pgxpool.Pool, telegramID int64) {
@@ -585,7 +585,7 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 
 		line := fmt.Sprintf("🔹 <b>%s</b>", truncate(title, 30))
 		if price != nil {
-			line += fmt.Sprintf("\n   💰 %.2f %s", *price, currency)
+			line += "\n   " + formatMoney(*price)
 		}
 		line += fmt.Sprintf("\n   📦 %s | %s", stockStatus, status)
 		line += fmt.Sprintf("\n   ⏱ %s", formatInterval(interval))
@@ -593,7 +593,7 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 		lines = append(lines, line)
 		shortID := id[:8]
 		rowsMarkup = append(rowsMarkup,
-			[]inlineButton{button("Редактировать "+shortID, "tracker:edit:"+shortID), button("Удалить "+shortID, "tracker:delete:"+shortID)},
+			[]inlineButton{button("Редактировать", "tracker:edit:"+shortID), button("Удалить", "tracker:delete:"+shortID)},
 		)
 	}
 
@@ -657,7 +657,7 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 	if title == "" {
 		title = extractDomain(url)
 	}
-	SendTelegramMessage(tg, chatID, fmt.Sprintf("✅ Трекер создан!\n\n%s\n💰 %.2f %s\n📦 %s\nID: <code>%s</code>", title, newPrice, candidate.Currency, result.StockStatus, trackerID[:8]))
+	SendTelegramMessage(tg, chatID, fmt.Sprintf("✅ Трекер создан!\n\n%s\n%s\n📦 %s\nID: <code>%s</code>", title, formatMoney(newPrice), result.StockStatus, trackerID[:8]))
 }
 
 func handleDeleteTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, trackerID string, log zerolog.Logger) {
@@ -711,7 +711,7 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	}
 	pool.Exec(ctx, `UPDATE trackers SET current_price = $2, current_stock_status = $3, currency = $4, last_checked_at = now(), next_check_at = now() + (check_interval_minutes * interval '1 minute'), consecutive_errors = 0, last_error = NULL WHERE id::text LIKE $1 || '%'`, trackerID, newPrice, result.StockStatus, nextCurrency)
 
-	SendTelegramMessage(tg, chatID, fmt.Sprintf("✅ Проверка завершена\n💰 %.2f %s\n📦 %s", newPrice, candidate.Currency, result.StockStatus))
+	SendTelegramMessage(tg, chatID, fmt.Sprintf("✅ Проверка завершена\n%s\n📦 %s", formatMoney(newPrice), result.StockStatus))
 }
 
 func handleTrackerHistory(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, trackerID string, log zerolog.Logger) {
@@ -743,7 +743,7 @@ func handleTrackerHistory(ctx context.Context, pool *pgxpool.Pool, tg *telegram.
 		var currency string
 		var checkedAt interface{}
 		priceRows.Scan(&price, &currency, &checkedAt)
-		lines = append(lines, fmt.Sprintf("💰 %.2f %s", price, currency))
+		lines = append(lines, formatMoney(price))
 	}
 
 	if !hasData {
@@ -783,6 +783,10 @@ func formatPriceForSearch(price float64) string {
 		return fmt.Sprintf("%.0f", price)
 	}
 	return fmt.Sprintf("%.2f", price)
+}
+
+func formatMoney(price float64) string {
+	return fmt.Sprintf("💰 %.2f", price)
 }
 
 func parseIntervalMinutes(text string) (int, bool) {

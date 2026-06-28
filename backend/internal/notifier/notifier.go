@@ -43,20 +43,20 @@ func (n *Notifier) SendPending(ctx context.Context) {
 
 	for rows.Next() {
 		var (
-			id               string
-			notifType        string
-			trackerID        string
-			userID           string
-			oldPrice         *float64
-			newPrice         *float64
-			currency         *string
-			oldStockStatus   *string
-			newStockStatus   *string
-			title            *string
-			url              string
-			currentPrice     *float64
-			trackerCurrency  string
-			telegramChatID   int64
+			id              string
+			notifType       string
+			trackerID       string
+			userID          string
+			oldPrice        *float64
+			newPrice        *float64
+			currency        *string
+			oldStockStatus  *string
+			newStockStatus  *string
+			title           *string
+			url             string
+			currentPrice    *float64
+			trackerCurrency string
+			telegramChatID  int64
 		)
 		if err := rows.Scan(&id, &notifType, &trackerID, &userID,
 			&oldPrice, &newPrice, &currency,
@@ -83,7 +83,7 @@ func (n *Notifier) send(ctx context.Context, id, notifType string, title *string
 
 	priceStr := ""
 	if currentPrice != nil {
-		priceStr = fmt.Sprintf("%.2f %s", *currentPrice, trackerCurrency)
+		priceStr = formatMoney(*currentPrice)
 	}
 
 	var text string
@@ -92,15 +92,11 @@ func (n *Notifier) send(ctx context.Context, id, notifType string, title *string
 	case "price_changed":
 		oldStr := "—"
 		newStr := "—"
-		c := ""
-		if currency != nil {
-			c = *currency
-		}
 		if oldPrice != nil {
-			oldStr = fmt.Sprintf("%.2f %s", *oldPrice, c)
+			oldStr = formatMoney(*oldPrice)
 		}
 		if newPrice != nil {
-			newStr = fmt.Sprintf("%.2f %s", *newPrice, c)
+			newStr = formatMoney(*newPrice)
 		}
 		text = fmt.Sprintf("🔔 Цена изменилась\n\nТовар: %s\nСтарая цена: %s\nНовая цена: %s\n\nОткрыть товар:\n%s",
 			displayTitle, oldStr, newStr, url)
@@ -142,6 +138,10 @@ func (n *Notifier) send(ctx context.Context, id, notifType string, title *string
 
 	n.pool.Exec(ctx, `UPDATE notifications SET status = 'sent', sent_at = now() WHERE id = $1`, id)
 	n.log.Info().Str("notification_id", id).Str("type", notifType).Int64("chat_id", chatID).Msg("notification sent")
+}
+
+func formatMoney(price float64) string {
+	return fmt.Sprintf("💰 %.2f", price)
 }
 
 func stockLabel(s string) string {
