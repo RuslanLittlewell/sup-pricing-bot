@@ -1,0 +1,76 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: price_tracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    command: ["go", "run", "./cmd/api"]
+    env_file: .env
+    environment:
+      ENV: development
+      PORT: "8080"
+      DATABASE_URL: postgres://postgres:postgres@db:5432/price_tracker?sslmode=disable
+      CORS_ORIGIN: http://localhost:3000
+      API_URL: http://localhost:3000
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    command: ["go", "run", "./cmd/worker"]
+    env_file: .env
+    environment:
+      ENV: development
+      DATABASE_URL: postgres://postgres:postgres@db:5432/price_tracker?sslmode=disable
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: builder
+    command: sh -c "npm install && rm -f .astro/dev.json 2>/dev/null; npx astro dev --host 0.0.0.0 --port 3000"
+    environment:
+      API_URL: http://backend:8080
+      PUBLIC_API_URL: http://localhost:8080
+      DATABASE_URL: postgres://postgres:postgres@db:5432/price_tracker?sslmode=disable
+      BETTER_AUTH_URL: http://localhost:3000
+      BETTER_AUTH_SECRET: dev-secret-change-in-production-32chars!
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

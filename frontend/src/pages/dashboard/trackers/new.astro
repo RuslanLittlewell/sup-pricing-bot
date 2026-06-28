@@ -1,0 +1,146 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+---
+
+<Layout title="Новый трекер — Price Tracker">
+  <div class="container" style="max-width:600px;margin-top:40px" id="app">
+    <h1 style="margin-bottom:24px">Новый трекер</h1>
+
+    <div class="card">
+      <div class="form-group">
+        <label>URL товара</label>
+        <input id="url" placeholder="https://www.zara.com/..." />
+      </div>
+      <div class="form-group">
+        <label>Текущая цена</label>
+        <input id="price" placeholder="1999.00" type="number" step="0.01" />
+      </div>
+      <div class="form-group">
+        <label>Валюта</label>
+        <select id="currency">
+          <option value="RUB">RUB</option>
+          <option value="USD">USD</option>
+          <option value="EUR">EUR</option>
+          <option value="PLN">PLN</option>
+        </select>
+      </div>
+      <button id="preview-btn" class="btn btn-primary" style="width:100%">Проверить цену</button>
+      <p id="error" style="color:red;margin-top:12px;display:none"></p>
+    </div>
+
+    <div id="result" style="display:none">
+      <div class="card" style="margin-top:16px">
+        <h2 style="margin-bottom:12px">Результат проверки</h2>
+        <p id="title"></p>
+        <img id="image" src="" alt="" style="max-height:120px;margin-bottom:8px;display:none" />
+        <p id="stock"></p>
+        <div id="candidates" style="margin-top:12px"></div>
+        <button id="create-btn" class="btn btn-primary" style="margin-top:16px;width:100%" disabled>Создать трекер</button>
+      </div>
+    </div>
+  </div>
+</Layout>
+
+<script>
+  const API = "";
+  let preview: any = null;
+  let selectedCandidate: any = null;
+
+  document.getElementById("preview-btn")!.addEventListener("click", async () => {
+    const url = (document.getElementById("url") as HTMLInputElement).value;
+    const price = (document.getElementById("price") as HTMLInputElement).value;
+    const currency = (document.getElementById("currency") as HTMLSelectElement).value;
+    const error = document.getElementById("error")!;
+
+    if (!url || !price) { error.textContent = "Заполните все поля"; error.style.display = ""; return; }
+
+    try {
+      const res = await fetch(API + "/api/extract/preview", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, initial_price: parseFloat(price), currency }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      preview = await res.json();
+      showPreview(preview);
+      error.style.display = "none";
+    } catch (e: any) {
+      error.textContent = e.message || "Ошибка при извлечении данных";
+      error.style.display = "";
+    }
+  });
+
+  function showPreview(data: any) {
+    document.getElementById("result")!.style.display = "";
+    document.getElementById("title")!.innerHTML = data.title ? `<strong>Название:</strong> ${data.title}` : "";
+    if (data.image_url) {
+      const img = document.getElementById("image") as HTMLImageElement;
+      img.src = data.image_url;
+      img.style.display = "";
+    }
+    document.getElementById("stock")!.innerHTML = data.stock_status ? `<strong>Наличие:</strong> ${data.stock_status === "in_stock" ? "В наличии" : "Нет в наличии"}` : "";
+
+    const container = document.getElementById("candidates")!;
+    container.innerHTML = "<p><strong>Найденные цены:</strong></p>";
+    if (data.candidates.length === 0) {
+      container.innerHTML += "<p>Цены не найдены</p>";
+      return;
+    }
+    data.candidates.forEach((c: any, i: number) => {
+      const label = document.createElement("label");
+      label.style.cssText = "display:block;margin-top:8px;padding:8px;border:1px solid #ddd;border-radius:8px;cursor:pointer";
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "candidate";
+      radio.style.cssText = "width:auto;margin-right:8px";
+      radio.addEventListener("change", () => {
+        selectedCandidate = c;
+        (document.getElementById("create-btn") as HTMLButtonElement).disabled = false;
+      });
+      label.appendChild(radio);
+      label.appendChild(document.createTextNode(`${c.price} ${c.currency} — ${c.label} (${(c.confidence * 100).toFixed(0)}%)`));
+      container.appendChild(label);
+    });
+
+    document.getElementById("create-btn")!.onclick = () => createTracker();
+  }
+
+  async function createTracker() {
+    const url = (document.getElementById("url") as HTMLInputElement).value;
+    const currency = (document.getElementById("currency") as HTMLSelectElement).value;
+    if (!preview || !selectedCandidate) return;
+
+    (document.getElementById("create-btn") as HTMLButtonElement).disabled = true;
+    try {
+      const trackerRes = await fetch(API + "/api/trackers", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, initial_price: parseFloat((document.getElementById("price") as HTMLInputElement).value), currency }),
+      });
+      if (!trackerRes.ok) throw new Error(await trackerRes.text());
+      const tracker = await trackerRes.json();
+
+      await fetch(API + "/api/extract/confirm", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tracker_id: tracker.id,
+          selected_price: selectedCandidate.price,
+          selected_currency: selectedCandidate.currency,
+          extraction_rule: selectedCandidate.rule,
+          extraction_confidence: selectedCandidate.confidence,
+          title: preview.title,
+          image_url: preview.image_url,
+          stock_status: preview.stock_status || "unknown",
+        }),
+      });
+      window.location.href = "/dashboard";
+    } catch (e: any) {
+      document.getElementById("error")!.textContent = e.message || "Ошибка";
+      (document.getElementById("error")!).style.display = "";
+    }
+  }
+</script>
