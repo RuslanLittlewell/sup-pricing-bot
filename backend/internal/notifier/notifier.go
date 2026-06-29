@@ -16,6 +16,57 @@ type Notifier struct {
 	log  zerolog.Logger
 }
 
+var notifierTexts = map[string]map[string]string{
+	"en": {
+		"price_changed":     "🔔 Price changed\n\nProduct: %s\nOld price: %s\nNew price: %s\n\nOpen product:\n%s",
+		"back_in_stock":     "✅ Product is back in stock\n\nProduct: %s\nPrice: %s\n\nOpen product:\n%s",
+		"out_of_stock":      "❌ Product is out of stock\n\nProduct: %s\nLast price: %s\n\nOpen product:\n%s",
+		"stock_changed":     "📦 Stock status changed\n\nProduct: %s\nBefore: %s\nNow: %s\nPrice: %s\n\nOpen product:\n%s",
+		"extraction_failed": "⚠️ Price check failed\n\nProduct: %s\nCould not extract the price. The site may have changed.\n\nOpen product:\n%s",
+		"unknown":           "unknown",
+		"stock_in":          "in stock",
+		"stock_out":         "out of stock",
+	},
+	"ru": {
+		"price_changed":     "🔔 Цена изменилась\n\nТовар: %s\nСтарая цена: %s\nНовая цена: %s\n\nОткрыть товар:\n%s",
+		"back_in_stock":     "✅ Товар снова в наличии\n\nТовар: %s\nЦена: %s\n\nОткрыть товар:\n%s",
+		"out_of_stock":      "❌ Товар закончился\n\nТовар: %s\nПоследняя цена: %s\n\nОткрыть товар:\n%s",
+		"stock_changed":     "📦 Статус наличия изменился\n\nТовар: %s\nБыло: %s\nСтало: %s\nЦена: %s\n\nОткрыть товар:\n%s",
+		"extraction_failed": "⚠️ Ошибка проверки цены\n\nТовар: %s\nНе удалось извлечь цену. Возможно, сайт изменился.\n\nОткрыть товар:\n%s",
+		"unknown":           "неизвестно",
+		"stock_in":          "в наличии",
+		"stock_out":         "нет в наличии",
+	},
+	"pl": {
+		"price_changed":     "🔔 Cena się zmieniła\n\nProdukt: %s\nStara cena: %s\nNowa cena: %s\n\nOtwórz produkt:\n%s",
+		"back_in_stock":     "✅ Produkt znów jest dostępny\n\nProdukt: %s\nCena: %s\n\nOtwórz produkt:\n%s",
+		"out_of_stock":      "❌ Produkt jest niedostępny\n\nProdukt: %s\nOstatnia cena: %s\n\nOtwórz produkt:\n%s",
+		"stock_changed":     "📦 Status dostępności się zmienił\n\nProdukt: %s\nByło: %s\nTeraz: %s\nCena: %s\n\nOtwórz produkt:\n%s",
+		"extraction_failed": "⚠️ Błąd sprawdzania ceny\n\nProdukt: %s\nNie udało się pobrać ceny. Strona mogła się zmienić.\n\nOtwórz produkt:\n%s",
+		"unknown":           "nieznany",
+		"stock_in":          "dostępny",
+		"stock_out":         "niedostępny",
+	},
+}
+
+func nt(lang, key string) string {
+	if texts, ok := notifierTexts[lang]; ok {
+		if text, ok := texts[key]; ok {
+			return text
+		}
+	}
+	return notifierTexts["en"][key]
+}
+
+func notifierLanguage(lang string) string {
+	switch lang {
+	case "ru", "en", "pl":
+		return lang
+	default:
+		return "en"
+	}
+}
+
 func New(pool *pgxpool.Pool, tg *telegram.Client, log zerolog.Logger) *Notifier {
 	return &Notifier{pool: pool, tg: tg, log: log}
 }
@@ -26,7 +77,7 @@ func (n *Notifier) SendPending(ctx context.Context) {
 		       n.old_price, n.new_price, n.currency,
 		       n.old_stock_status, n.new_stock_status,
 		       t.title, t.url, t.current_price, t.currency,
-		       tl.telegram_id
+		       tl.telegram_id, COALESCE(tl.language, 'en')
 		FROM notifications n
 		JOIN trackers t ON t.id = n.tracker_id
 		JOIN telegram_links tl ON tl.user_id = n.user_id
@@ -57,16 +108,17 @@ func (n *Notifier) SendPending(ctx context.Context) {
 			currentPrice    *float64
 			trackerCurrency string
 			telegramChatID  int64
+			lang            string
 		)
 		if err := rows.Scan(&id, &notifType, &trackerID, &userID,
 			&oldPrice, &newPrice, &currency,
 			&oldStockStatus, &newStockStatus,
 			&title, &url, &currentPrice, &trackerCurrency,
-			&telegramChatID); err != nil {
+			&telegramChatID, &lang); err != nil {
 			n.log.Error().Err(err).Msg("failed to scan notification")
 			continue
 		}
-		n.send(ctx, id, notifType, title, url, oldPrice, newPrice, currency, oldStockStatus, newStockStatus, currentPrice, trackerCurrency, telegramChatID)
+		n.send(ctx, id, notifType, title, url, oldPrice, newPrice, currency, oldStockStatus, newStockStatus, currentPrice, trackerCurrency, telegramChatID, notifierLanguage(lang))
 	}
 }
 
@@ -74,7 +126,7 @@ func (n *Notifier) send(ctx context.Context, id, notifType string, title *string
 	oldPrice, newPrice *float64, currency *string,
 	oldStockStatus, newStockStatus *string,
 	currentPrice *float64, trackerCurrency string,
-	chatID int64) {
+	chatID int64, lang string) {
 
 	displayTitle := url
 	if title != nil && *title != "" {
@@ -98,32 +150,27 @@ func (n *Notifier) send(ctx context.Context, id, notifType string, title *string
 		if newPrice != nil {
 			newStr = formatMoney(*newPrice)
 		}
-		text = fmt.Sprintf("🔔 Цена изменилась\n\nТовар: %s\nСтарая цена: %s\nНовая цена: %s\n\nОткрыть товар:\n%s",
-			displayTitle, oldStr, newStr, url)
+		text = fmt.Sprintf(nt(lang, "price_changed"), displayTitle, oldStr, newStr, url)
 
 	case "back_in_stock":
-		text = fmt.Sprintf("✅ Товар снова в наличии\n\nТовар: %s\nЦена: %s\n\nОткрыть товар:\n%s",
-			displayTitle, priceStr, url)
+		text = fmt.Sprintf(nt(lang, "back_in_stock"), displayTitle, priceStr, url)
 
 	case "out_of_stock":
-		text = fmt.Sprintf("❌ Товар закончился\n\nТовар: %s\nПоследняя цена: %s\n\nОткрыть товар:\n%s",
-			displayTitle, priceStr, url)
+		text = fmt.Sprintf(nt(lang, "out_of_stock"), displayTitle, priceStr, url)
 
 	case "stock_changed":
-		oldStr := "неизвестно"
-		newStr := "неизвестно"
+		oldStr := nt(lang, "unknown")
+		newStr := nt(lang, "unknown")
 		if oldStockStatus != nil {
-			oldStr = stockLabel(*oldStockStatus)
+			oldStr = stockLabel(lang, *oldStockStatus)
 		}
 		if newStockStatus != nil {
-			newStr = stockLabel(*newStockStatus)
+			newStr = stockLabel(lang, *newStockStatus)
 		}
-		text = fmt.Sprintf("📦 Статус наличия изменился\n\nТовар: %s\nБыло: %s\nСтало: %s\nЦена: %s\n\nОткрыть товар:\n%s",
-			displayTitle, oldStr, newStr, priceStr, url)
+		text = fmt.Sprintf(nt(lang, "stock_changed"), displayTitle, oldStr, newStr, priceStr, url)
 
 	case "extraction_failed":
-		text = fmt.Sprintf("⚠️ Ошибка проверки цены\n\nТовар: %s\nНе удалось извлечь цену. Возможно, сайт изменился.\n\nОткрыть товар:\n%s",
-			displayTitle, url)
+		text = fmt.Sprintf(nt(lang, "extraction_failed"), displayTitle, url)
 
 	default:
 		n.log.Warn().Str("type", notifType).Msg("unknown notification type")
@@ -144,12 +191,12 @@ func formatMoney(price float64) string {
 	return fmt.Sprintf("💰 %.2f", price)
 }
 
-func stockLabel(s string) string {
+func stockLabel(lang, s string) string {
 	switch s {
 	case "in_stock":
-		return "в наличии"
+		return nt(lang, "stock_in")
 	case "out_of_stock":
-		return "нет в наличии"
+		return nt(lang, "stock_out")
 	default:
 		return s
 	}

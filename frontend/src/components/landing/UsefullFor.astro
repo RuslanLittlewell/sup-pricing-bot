@@ -1,0 +1,152 @@
+---
+const botUrl = "https://t.me/sur_price_bot/chat";
+
+const categories = [
+  {
+    title: "Покупателям техники и электроники",
+    icon: "/images/tech.png",
+    alt: "Техника и электроника",
+    accent: "#04a1fc",
+    headline: "Ловите лучшую цену на гаджеты",
+    stat: "Экономия до 30% на технике",
+    quote:
+      "Следите за ценой на ноутбук, смартфон или наушники — и покупайте ровно тогда, когда она падает.",
+    example: "Ноутбуки · смартфоны · наушники",
+  },
+  {
+    title: "Охотникам за скидками",
+    icon: "/images/shops.png",
+    alt: "Скидки и распродажи",
+    accent: "#09aee7",
+    headline: "Не пропустите ни одной распродажи",
+    stat: "Уведомления о скидках в реальном времени",
+    quote:
+      "Добавьте товары из вишлиста — и получите сигнал в Telegram, как только цена опустится.",
+    example: "Вишлист · акции · промокоды",
+  },
+  {
+    title: "Родителям",
+    icon: "/images/childs.png",
+    alt: "Детские товары",
+    accent: "#11b2e0",
+    headline: "Покупайте детское дешевле",
+    stat: "Отслеживайте цены на товары для детей",
+    quote:
+      "Подгузники, игрушки и одежда — берите на пике скидки, а не по полной цене.",
+    example: "Подгузники · игрушки · одежда",
+  },
+  {
+    title: "Продавцам на маркетплейсах",
+    icon: "/images/marketplaces.png",
+    alt: "Маркетплейсы",
+    accent: "#0ebad4",
+    headline: "Держите цены под контролем",
+    stat: "Мониторинг цен конкурентов 24/7",
+    quote:
+      "Смотрите, как меняются цены конкурентов, и корректируйте свои вовремя.",
+    example: "Wildberries · Ozon · Я.Маркет",
+  },
+  {
+    title: "Реселлерам и арбитражникам",
+    icon: "/images/resail.png",
+    alt: "Перепродажа",
+    accent: "#13c3c4",
+    headline: "Находите выгодные сделки первыми",
+    stat: "Ловите ценовые просадки для перепродажи",
+    quote:
+      "Автоматически отслеживайте десятки товаров и зарабатывайте на разнице в цене.",
+    example: "Опт · перепродажа · арбитраж",
+  },
+  {
+    title: "Путешественникам",
+    icon: "/images/travel.png",
+    alt: "Путешествия",
+    accent: "#16c8bd",
+    headline: "Собирайтесь в поездку выгодно",
+    stat: "Цены на чемоданы, гаджеты и снаряжение",
+    quote:
+      "Подготовьтесь к путешествию, не переплачивая за экипировку и аксессуары.",
+    example: "Чемоданы · гаджеты · снаряжение",
+  },
+];
+---
+
+<section class="container mx-auto my-20 px-6 lg:my-32">
+  <header class="mb-16 text-center text-balance lg:mb-24">
+    <h2 class="mx-auto max-w-4xl text-3xl font-bold text-slate-900 md:text-5xl lg:text-6xl">
+      Кому пригодится SurPrice
+    </h2>
+    <p class="mx-auto mt-5 max-w-2xl text-lg text-slate-500">
+      Один бот, который экономит деньги в самых разных задачах
+    </p>
+  </header>
+
+  <div class="grid grid-cols-1 gap-5">
+    {
+      categories.map((c) => (
+        <article
+          class="grid grid-cols-1 overflow-hidden rounded-2xl border-t-8 bg-white shadow-lg md:sticky md:top-24 md:grid-cols-3"
+          style={`border-color:${c.accent}`}
+        >
+          <div
+            class="relative isolate flex items-center justify-center md:aspect-square"
+          >
+            <img src={c.icon} alt={c.alt} class="h-auto w-full" />
+          </div>
+
+          <div class="grid grid-cols-1 gap-5 p-6 text-balance md:col-span-2 md:p-8 lg:grid-cols-3">
+            <div class="flex h-full w-full flex-col gap-6 lg:col-span-2">
+              <p
+                class="text-sm font-semibold uppercase tracking-wide"
+                style={`color:${c.accent}`}
+              >
+                {c.title}
+              </p>
+
+              <h3 class="text-2xl font-bold text-slate-900 xl:text-4xl">
+                {c.headline}
+              </h3>
+
+              <div class="flex flex-col gap-6 lg:mt-auto xl:flex-row xl:items-center xl:justify-between">
+                <p class="text-lg font-semibold text-slate-700 xl:text-2xl">
+                  {c.stat}
+                </p>
+
+                <a
+                  href={botUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="group inline-flex w-fit shrink-0 items-center gap-4 rounded-full py-2 pl-5 pr-2 leading-none text-white transition-all hover:opacity-90 xl:self-end"
+                  style={`background:${c.accent}`}
+                >
+                  <span class="text-sm font-medium">Начать отслеживать</span>
+                  <span class="flex aspect-square w-9 items-center justify-center rounded-full bg-black/20 transition-transform group-hover:scale-110">
+                    <svg
+                      viewBox="0 0 14 12"
+                      class="w-4 fill-white transition-transform group-active:translate-x-0.5"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path d="M13.576 6.103 7.88 11.801l-.805-.826 4.3-4.278H.319V5.513h11.055L7.096 1.235 7.9.431l5.676 5.676v-.004Z" />
+                    </svg>
+                  </span>
+                </a>
+              </div>
+            </div>
+
+            <div class="flex flex-col gap-4 border-t border-slate-200 pt-5 text-sm lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
+              <blockquote class="text-slate-600 lg:mt-auto 2xl:text-base">
+                {c.quote}
+              </blockquote>
+                <span
+                  class="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium"
+                  style={`background:${c.accent}1a;color:${c.accent}`}
+                >
+                  <span>{c.example}</span>
+                </span>
+            </div>
+          </div>
+        </article>
+      ))
+    }
+  </div>
+</section>

@@ -1,0 +1,63 @@
+---
+const slides = [
+  { src: '/slider/logos_1.png', width: 1678, alt: 'Supported stores' },
+  { src: '/slider/logos_2.png', width: 1777, alt: 'Supported stores' },
+]
+---
+
+<div class="companies-slider relative z-[1] my-20 overflow-hidden py-5">
+  <div class="companies-slider__track flex w-max items-center">
+    {[0, 1].map((groupIndex) => (
+      <div class="companies-slider__group flex shrink-0 items-center" aria-hidden={groupIndex === 1 ? 'true' : undefined}>
+        {slides.map((slide, slideIndex) => (
+          <img
+            src={slide.src}
+            alt={groupIndex === 0 ? slide.alt : ''}
+            decoding="async"
+            loading={groupIndex === 0 && slideIndex === 0 ? 'eager' : 'lazy'}
+            fetchpriority={groupIndex === 0 && slideIndex === 0 ? 'high' : 'auto'}
+            width={slide.width}
+            height="80"
+            class="h-20 w-auto max-w-none shrink-0 opacity-80"
+          />
+        ))}
+      </div>
+    ))}
+  </div>
+
+  <div class="pointer-events-none absolute inset-y-0 left-0 w-20 bg-gradient-to-r from-white to-white/0"></div>
+  <div class="pointer-events-none absolute inset-y-0 right-0 w-20 bg-gradient-to-l from-white to-white/0"></div>
+</div>
+
+<style>
+  .companies-slider__track {
+    animation: companies-slide 85s linear infinite;
+    backface-visibility: hidden;
+    transform: translate3d(0, 0, 0);
+    will-change: transform;
+  }
+
+  .companies-slider__group {
+    width: max-content;
+  }
+
+  .companies-slider:hover .companies-slider__track {
+    animation-play-state: paused;
+  }
+
+  @keyframes companies-slide {
+    from {
+      transform: translate3d(0, 0, 0);
+    }
+
+    to {
+      transform: translate3d(-50%, 0, 0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .companies-slider__track {
+      animation: none;
+    }
+  }
+</style>

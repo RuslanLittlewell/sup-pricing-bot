@@ -1,15 +1,12 @@
 ---
+import InfoBanner from "@/components/landing/InfoBanner.astro";
 import Hero from "../components/landing/Hero.astro";
 import Layout from "../layouts/Layout.astro";
+import UsefullFor from "@/components/landing/UsefullFor.astro";
 ---
 
 <Layout title="Price Tracker — отслеживание цен в Telegram">
   <Hero />
-  <div class="container" style="text-align:center;padding-top:80px">
-    <h1 data-i18n="home.title" style="font-size:48px;margin-bottom:16px">Price Tracker</h1>
-    <p data-i18n="home.subtitle" style="font-size:18px;color:#666;margin-bottom:32px;max-width:500px;margin:0 auto 32px">
-      Отслеживайте цены и наличие товаров в магазинах. Получайте мгновенные уведомления об изменениях в Telegram.
-    </p>
-    <a data-i18n="home.login" href="/login" class="btn btn-primary" style="font-size:18px">Войти через Telegram</a>
-  </div>
+  <InfoBanner />
+  <UsefullFor />
 </Layout>

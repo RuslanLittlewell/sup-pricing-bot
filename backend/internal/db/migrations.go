@@ -46,6 +46,11 @@ var Migrations = []Migration{
 		Description: "add per tracker check interval",
 		SQL:         migrationV6,
 	},
+	{
+		Version:     7,
+		Description: "add telegram language preference",
+		SQL:         migrationV7,
+	},
 }
 
 const migrationV1 = `
@@ -293,6 +298,11 @@ ALTER TABLE telegram_states ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFA
 
 const migrationV6 = `
 ALTER TABLE trackers ADD COLUMN IF NOT EXISTS check_interval_minutes INT NOT NULL DEFAULT 180;
+`
+
+const migrationV7 = `
+ALTER TABLE telegram_links ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT 'en';
+UPDATE telegram_links SET language = 'en' WHERE language IS NULL OR language NOT IN ('en', 'ru', 'pl');
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {

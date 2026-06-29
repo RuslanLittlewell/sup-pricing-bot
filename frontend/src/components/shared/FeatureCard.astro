@@ -1,0 +1,87 @@
+---
+interface Props {
+  titleKey: string;
+  title: string;
+  textKey: string;
+  text: string;
+}
+
+const { titleKey, title, textKey, text } = Astro.props;
+---
+
+<div class="border-glow rounded-lg border border-white/15 bg-white/15 p-5 backdrop-blur-sm">
+  <h3 data-i18n={titleKey} class="mb-2 text-lg font-bold text-white">{title}</h3>
+  <p data-i18n={textKey} class="text-sm leading-6 text-white/85">{text}</p>
+</div>
+
+<style>
+  .border-glow {
+    --glow-radius: 100px;
+    --spotlight-radius: 200px;
+    position: relative;
+    isolation: isolate;
+    /* Inner spotlight that follows the cursor (reactbits SpotlightCard) */
+    background-image: radial-gradient(
+      var(--spotlight-radius) circle at var(--glow-x, -300px) var(--glow-y, -300px),
+      rgba(255, 255, 255, 0.25),
+      transparent 65%
+    );
+    transition: background-color 0.25s ease;
+  }
+
+  /* Soft halo that spills beyond the border */
+  .border-glow::before {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    border-radius: inherit;
+    background: radial-gradient(
+      calc(var(--glow-radius) * 1.4) circle at var(--glow-x, -200px) var(--glow-y, -200px),
+      rgba(22, 200, 189, 0.55),
+      transparent 70%
+    );
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    pointer-events: none;
+    z-index: -1;
+    filter: blur(10px);
+  }
+
+  /* Crisp glowing border line */
+  .border-glow::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1.5px;
+    background: radial-gradient(
+      var(--glow-radius) circle at var(--glow-x, -200px) var(--glow-y, -200px),
+      rgba(255, 255, 255, 1),
+      rgba(22, 200, 189, 0.85) 40%,
+      transparent 100%
+    );
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    pointer-events: none;
+  }
+
+  .border-glow:hover::before,
+  .border-glow:hover::after {
+    opacity: 1;
+  }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLElement>(".border-glow").forEach((card) => {
+    card.addEventListener("pointermove", (event) => {
+      const rect = card.getBoundingClientRect();
+      card.style.setProperty("--glow-x", `${event.clientX - rect.left}px`);
+      card.style.setProperty("--glow-y", `${event.clientY - rect.top}px`);
+    });
+  });
+</script>

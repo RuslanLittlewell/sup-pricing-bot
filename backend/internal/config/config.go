@@ -15,6 +15,7 @@ type Config struct {
 	AdminToken      string
 	SessionSecret   string
 	ScraperCookies  string
+	ScraperProxy    string
 
 	AppName    string
 	AppURL     string
@@ -32,6 +33,7 @@ func Load() *Config {
 		AdminToken:      getEnv("ADMIN_TOKEN", "admin-secret"),
 		SessionSecret:   getEnv("SESSION_SECRET", "change-me-in-production"),
 		ScraperCookies:  getEnv("SCRAPER_COOKIES_FILE", ""),
+		ScraperProxy:    getEnv("SCRAPER_PROXY_URL", ""),
 		AppName:         getEnv("APP_NAME", "Price Tracker"),
 		AppURL:          getEnv("APP_URL", "http://localhost:3000"),
 		CORSOrigin:      getEnv("CORS_ORIGIN", "http://localhost:3000"),

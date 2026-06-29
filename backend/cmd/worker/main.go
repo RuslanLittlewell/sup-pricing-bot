@@ -43,7 +43,7 @@ func main() {
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
 
-	rend, err := renderer.New(cfg.ScraperCookies)
+	rend, err := renderer.New(cfg.ScraperCookies, cfg.ScraperProxy)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to start headless browser")
 	}
@@ -56,7 +56,7 @@ func main() {
 	defer trackerTicker.Stop()
 	defer notifTicker.Stop()
 
-	fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies)
+	fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
 	zaraExtractor := extractor.NewZara()
 	genericExtractor := extractor.NewGeneric()
 

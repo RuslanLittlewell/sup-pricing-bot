@@ -24,11 +24,19 @@ type PageFetcher struct {
 	cookies    []scraper.Cookie
 }
 
-func NewPageFetcher(r *renderer.Renderer, cookiesFile string) *PageFetcher {
+func NewPageFetcher(r *renderer.Renderer, cookiesFile, proxyURL string) *PageFetcher {
 	cookies, _ := scraper.LoadCookies(cookiesFile)
+	transport := &http.Transport{}
+	if proxyURL != "" {
+		if proxy, err := url.Parse(proxyURL); err == nil {
+			transport.Proxy = http.ProxyURL(proxy)
+		}
+	}
+
 	return &PageFetcher{
 		httpClient: &http.Client{
-			Timeout: requestTimeout,
+			Timeout:   requestTimeout,
+			Transport: transport,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return fmt.Errorf("too many redirects")

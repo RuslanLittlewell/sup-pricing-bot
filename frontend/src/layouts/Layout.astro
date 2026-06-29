@@ -6,7 +6,7 @@ export interface Props {
 
 const { title = "Price Tracker", description = "Отслеживание изменения цен и наличия товаров с уведомлениями в Telegram" } = Astro.props;
 
-import Header from "@/components/Header.astro";
+import Header from "@/components/layout/Header.astro";
 import "../styles/globals.css";
 ---
 
@@ -38,6 +38,19 @@ import "../styles/globals.css";
           "home.subtitle":
             "Track product prices and availability across stores. Get instant Telegram alerts when changes happen.",
           "home.login": "Login with Telegram",
+          "info.eyebrow": "Price tracking via Telegram",
+          "info.title": "Track product prices across online stores automatically",
+          "info.description":
+            "SurPrice monitors product pages, detects price and availability changes, and sends Telegram alerts when it is time to buy.",
+          "info.card1.title": "Price drop alerts",
+          "info.card1.text":
+            "Add a product URL once and receive a Telegram notification when the price changes.",
+          "info.card2.title": "Availability monitoring",
+          "info.card2.text":
+            "Track whether products are in stock, out of stock, or available again.",
+          "info.card3.title": "Flexible scan intervals",
+          "info.card3.text":
+            "Choose how often each tracker checks the page: every hour, daily, or anything in between.",
         },
         ru: {
           "nav.features": "Возможности",
@@ -52,6 +65,19 @@ import "../styles/globals.css";
           "home.subtitle":
             "Отслеживайте цены и наличие товаров в магазинах. Получайте мгновенные уведомления об изменениях в Telegram.",
           "home.login": "Войти через Telegram",
+          "info.eyebrow": "Отслеживание цен в Telegram",
+          "info.title": "Автоматически мониторьте цены товаров в интернет-магазинах",
+          "info.description":
+            "SurPrice проверяет страницы товаров, находит изменения цены и наличия и отправляет уведомления в Telegram, когда пора покупать.",
+          "info.card1.title": "Уведомления о снижении цены",
+          "info.card1.text":
+            "Добавьте ссылку на товар один раз и получите сообщение в Telegram, когда цена изменится.",
+          "info.card2.title": "Контроль наличия",
+          "info.card2.text":
+            "Следите, есть ли товар в наличии, закончился ли он или снова появился в продаже.",
+          "info.card3.title": "Гибкая частота проверок",
+          "info.card3.text":
+            "Настраивайте, как часто проверять каждый товар: каждый час, раз в день или с другим интервалом.",
         },
         pl: {
           "nav.features": "Funkcje",
@@ -66,6 +92,19 @@ import "../styles/globals.css";
           "home.subtitle":
             "Śledź ceny i dostępność produktów w sklepach. Otrzymuj natychmiastowe powiadomienia o zmianach w Telegramie.",
           "home.login": "Zaloguj przez Telegram",
+          "info.eyebrow": "Monitoring cen w Telegramie",
+          "info.title": "Automatycznie śledź ceny produktów w sklepach internetowych",
+          "info.description":
+            "SurPrice monitoruje strony produktów, wykrywa zmiany ceny i dostępności oraz wysyła powiadomienia w Telegramie, gdy warto kupić.",
+          "info.card1.title": "Alerty o spadku ceny",
+          "info.card1.text":
+            "Dodaj link do produktu raz i otrzymaj powiadomienie w Telegramie, gdy cena się zmieni.",
+          "info.card2.title": "Monitoring dostępności",
+          "info.card2.text":
+            "Sprawdzaj, czy produkt jest dostępny, wyprzedany albo ponownie wrócił do sprzedaży.",
+          "info.card3.title": "Elastyczne interwały skanowania",
+          "info.card3.text":
+            "Ustaw, jak często sprawdzać każdy produkt: co godzinę, raz dziennie albo w innym rytmie.",
         },
       };
 

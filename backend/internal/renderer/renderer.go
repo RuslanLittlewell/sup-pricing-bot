@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -21,9 +23,11 @@ const browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 const acceptLanguage = "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"
 
 type Renderer struct {
-	allocCtx context.Context
-	cancel   context.CancelFunc
-	cookies  []scraper.Cookie
+	allocCtx      context.Context
+	cancel        context.CancelFunc
+	cookies       []scraper.Cookie
+	proxyUser     string
+	proxyPassword string
 }
 
 type PriceBlockCandidate struct {
@@ -33,7 +37,8 @@ type PriceBlockCandidate struct {
 	TotalFound int    `json:"total_found"`
 }
 
-func New(cookiesFile string) (*Renderer, error) {
+func New(cookiesFile, proxyURL string) (*Renderer, error) {
+	proxyServer, proxyUser, proxyPassword := normalizeProxyURL(proxyURL)
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath("/usr/bin/chromium"),
 		chromedp.Flag("headless", true),
@@ -48,6 +53,9 @@ func New(cookiesFile string) (*Renderer, error) {
 		chromedp.Flag("lang", "pl-PL"),
 		chromedp.UserAgent(browserUserAgent),
 	)
+	if proxyServer != "" {
+		opts = append(opts, chromedp.ProxyServer(proxyServer))
+	}
 
 	cookies, err := scraper.LoadCookies(cookiesFile)
 	if err != nil {
@@ -55,7 +63,7 @@ func New(cookiesFile string) (*Renderer, error) {
 	}
 
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	return &Renderer{allocCtx: allocCtx, cancel: cancel, cookies: cookies}, nil
+	return &Renderer{allocCtx: allocCtx, cancel: cancel, cookies: cookies, proxyUser: proxyUser, proxyPassword: proxyPassword}, nil
 }
 
 func (r *Renderer) Close() {
@@ -73,6 +81,7 @@ func (r *Renderer) Render(ctx context.Context, url string, waitTime time.Duratio
 
 	var html string
 	tasks := []chromedp.Action{
+		r.setupProxyAuth(),
 		setupRealBrowser(),
 		r.setCookies(),
 		chromedp.Navigate(url),
@@ -103,15 +112,53 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
 
 	script := fmt.Sprintf(`(() => {
   const rawInput = String(%s).trim().toLowerCase();
-  const target = rawInput.replace(/[^\d]/g, "");
-  const variants = new Set([rawInput]);
-  if (/^\d+$/.test(rawInput)) {
-    variants.add(rawInput + ",00");
-    variants.add(rawInput + ".00");
-    variants.add(rawInput + " 00");
-  }
-  if (target.length >= 2) variants.add(target);
-  if (target.endsWith("00") && target.length > 2) variants.add(target.slice(0, -2));
+  const normalizePrice = (value) => {
+    let s = String(value || "")
+      .toLowerCase()
+      .replace(/\u00a0/g, " ")
+      .replace(/руб\.?|р\.|pln|zł|eur|usd|gbp|rub|[€$£₽]/gi, "")
+      .replace(/[^\d,.\s]/g, "")
+      .trim();
+    if (!/\d/.test(s)) return "";
+
+    const spaceGroups = s.split(/\s+/).filter(Boolean);
+    const hasDecimalSeparator = s.includes(",") || s.includes(".");
+    if (!hasDecimalSeparator && spaceGroups.length > 1 && spaceGroups[spaceGroups.length - 1].length <= 2) {
+      const fraction = spaceGroups.pop().padEnd(2, "0").slice(0, 2);
+      const integer = spaceGroups.join("").replace(/^0+(?=\d)/, "") || "0";
+      return integer + fraction;
+    }
+
+    s = s.replace(/\s+/g, "");
+    const lastComma = s.lastIndexOf(",");
+    const lastDot = s.lastIndexOf(".");
+    const decimalIndex = Math.max(lastComma, lastDot);
+    const decimalChar = decimalIndex >= 0 ? s[decimalIndex] : "";
+    const fractionLength = decimalIndex >= 0 ? s.length - decimalIndex - 1 : 0;
+    let integer = "";
+    let fraction = "00";
+
+    if (decimalChar && fractionLength > 0 && fractionLength <= 2) {
+      integer = s.slice(0, decimalIndex).replace(/[^\d]/g, "");
+      fraction = s.slice(decimalIndex + 1).replace(/[^\d]/g, "").padEnd(2, "0").slice(0, 2);
+    } else {
+      integer = s.replace(/[^\d]/g, "");
+    }
+
+    integer = integer.replace(/^0+(?=\d)/, "") || "0";
+    return integer + fraction;
+  };
+  const target = normalizePrice(rawInput);
+  const priceTokens = (text) => {
+    const tokens = [];
+    const re = /(?:[$€£₽]\s*)?\d[\d\s.,]*(?:\s*(?:zł|pln|eur|usd|gbp|rub|€|\$|£|₽))?/gi;
+    let match;
+    while ((match = re.exec(String(text || "")))) {
+      const normalized = normalizePrice(match[0]);
+      if (normalized) tokens.push(normalized);
+    }
+    return tokens;
+  };
   const visible = (el) => {
     const style = window.getComputedStyle(el);
     const rect = el.getBoundingClientRect();
@@ -128,15 +175,8 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
     el.getAttribute("class") || ""
   ].join(" ").replace(/\s+/g, " ").trim();
   const matches = (text) => {
-    const lower = String(text || "").toLowerCase();
-    const digits = lower.replace(/[^\d]/g, "");
-    for (const variant of variants) {
-      if (!variant) continue;
-      if (lower.includes(variant)) return true;
-      const variantDigits = String(variant).replace(/[^\d]/g, "");
-      if (variantDigits.length >= 2 && digits.includes(variantDigits)) return true;
-    }
-    return target.length >= 2 && digits.includes(target);
+    if (!target) return false;
+    return priceTokens(text).some((token) => token === target);
   };
   const cssPath = (el) => {
     const parts = [];
@@ -213,6 +253,7 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
 })()`, string(priceJSON), index)
 
 	if err := chromedp.Run(ctx,
+		r.setupProxyAuth(),
 		setupRealBrowser(),
 		r.setCookies(),
 		chromedp.Navigate(url),
@@ -247,6 +288,7 @@ func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (st
 
 	var text string
 	if err := chromedp.Run(ctx,
+		r.setupProxyAuth(),
 		setupRealBrowser(),
 		r.setCookies(),
 		chromedp.Navigate(url),
@@ -260,6 +302,49 @@ func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (st
 	}
 
 	return text, nil
+}
+
+func normalizeProxyURL(raw string) (server, username, password string) {
+	if raw == "" {
+		return "", "", ""
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return raw, "", ""
+	}
+
+	if parsed.User != nil {
+		username = parsed.User.Username()
+		password, _ = parsed.User.Password()
+		parsed.User = nil
+	}
+
+	return parsed.String(), username, password
+}
+
+func (r *Renderer) setupProxyAuth() chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		if r.proxyUser == "" {
+			return nil
+		}
+
+		chromedp.ListenTarget(ctx, func(ev interface{}) {
+			authEvent, ok := ev.(*fetch.EventAuthRequired)
+			if !ok {
+				return
+			}
+			go func() {
+				_ = fetch.ContinueWithAuth(authEvent.RequestID, &fetch.AuthChallengeResponse{
+					Response: fetch.AuthChallengeResponseResponseProvideCredentials,
+					Username: r.proxyUser,
+					Password: r.proxyPassword,
+				}).Do(ctx)
+			}()
+		})
+
+		return fetch.Enable().WithHandleAuthRequests(true).Do(ctx)
+	})
 }
 
 func setupRealBrowser() chromedp.Action {

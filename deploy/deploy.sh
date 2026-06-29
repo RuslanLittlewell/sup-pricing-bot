@@ -22,13 +22,14 @@ dotenv_get() {
   local key="$1"
   local file="${PROJECT_ROOT}/.env"
   [[ -f "$file" ]] || return 0
-  grep -E "^${key}=" "$file" | tail -n 1 | cut -d= -f2-
+  grep -E "^${key}=" "$file" | tail -n 1 | cut -d= -f2- || true
 }
 
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(dotenv_get TELEGRAM_BOT_TOKEN)}"
 BOT_USERNAME="${BOT_USERNAME:-$(dotenv_get BOT_USERNAME)}"
 BOT_USERNAME="${BOT_USERNAME:-sur_price_bot}"
 SCRAPER_COOKIES_FILE="${SCRAPER_COOKIES_FILE:-$(dotenv_get SCRAPER_COOKIES_FILE)}"
+SCRAPER_PROXY_URL="${SCRAPER_PROXY_URL:-$(dotenv_get SCRAPER_PROXY_URL)}"
 
 if [[ -z "${TELEGRAM_BOT_TOKEN}" ]]; then
   echo "TELEGRAM_BOT_TOKEN is required. Export it or add it to .env." >&2
@@ -85,14 +86,15 @@ run_remote "cd '${DEPLOY_DIR}' && \
   if ! grep -q '^POSTGRES_PASSWORD=' .env.production; then echo POSTGRES_PASSWORD=\$(openssl rand -hex 24) >> .env.production; fi && \
   if ! grep -q '^BETTER_AUTH_SECRET=' .env.production; then echo BETTER_AUTH_SECRET=\$(openssl rand -hex 32) >> .env.production; fi && \
   if ! grep -q '^ADMIN_TOKEN=' .env.production; then echo ADMIN_TOKEN=\$(openssl rand -hex 32) >> .env.production; fi && \
-  grep -v -E '^(APP_DOMAIN|API_DOMAIN|FRONTEND_HOST_PORT|BACKEND_HOST_PORT|TELEGRAM_BOT_TOKEN|BOT_USERNAME)=' .env.production > .env.production.tmp && mv .env.production.tmp .env.production && \
+  grep -v -E '^(APP_DOMAIN|API_DOMAIN|FRONTEND_HOST_PORT|BACKEND_HOST_PORT|TELEGRAM_BOT_TOKEN|BOT_USERNAME|SCRAPER_PROXY_URL)=' .env.production > .env.production.tmp && mv .env.production.tmp .env.production && \
   printf '%s\n' \
     'APP_DOMAIN=${APP_DOMAIN}' \
     'API_DOMAIN=${API_DOMAIN}' \
     'FRONTEND_HOST_PORT=${FRONTEND_HOST_PORT}' \
     'BACKEND_HOST_PORT=${BACKEND_HOST_PORT}' \
     'TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}' \
-    'BOT_USERNAME=${BOT_USERNAME}' >> .env.production"
+    'BOT_USERNAME=${BOT_USERNAME}' \
+    'SCRAPER_PROXY_URL=${SCRAPER_PROXY_URL}' >> .env.production"
 
 echo "Installing Docker on server if needed..."
 run_remote "if ! command -v docker >/dev/null 2>&1; then curl -fsSL https://get.docker.com | sh; fi"

@@ -25,7 +25,7 @@ func ExtractPreview(pool *pgxpool.Pool, cfg *config.Config, log zerolog.Logger, 
 			return
 		}
 
-		fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies)
+		fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
 		body, err := fetcher.Fetch(req.URL)
 		if err != nil {
 			http.Error(w, "failed to fetch page: "+err.Error(), http.StatusBadRequest)

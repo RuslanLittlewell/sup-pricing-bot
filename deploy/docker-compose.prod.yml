@@ -49,6 +49,7 @@ services:
       BOT_USERNAME: ${BOT_USERNAME}
       TELEGRAM_WEBHOOK_URL: https://${API_DOMAIN}/api/telegram/webhook
       SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
+      SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
     volumes:
       - ./secrets/scraper-cookies.json:/run/secrets/scraper-cookies.json:ro
     ports:
@@ -72,6 +73,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       BOT_USERNAME: ${BOT_USERNAME}
       SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
+      SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
     volumes:
       - ./secrets/scraper-cookies.json:/run/secrets/scraper-cookies.json:ro
     depends_on:

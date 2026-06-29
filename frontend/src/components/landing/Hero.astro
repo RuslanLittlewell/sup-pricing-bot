@@ -1,10 +1,12 @@
 ---
-import { Image } from 'astro:assets';
-
+import { Image } from "astro:assets";
+import CompaniesSlider from "../shared/CompaniesSlider.astro";
 ---
 
 <section class="relative min-h-screen overflow-hidden bg-white">
-  <div class="container relative z-10 mx-auto flex min-h-screen items-center px-6 pt-24">
+  <div
+    class="container relative z-10 mx-auto flex flex-col min-h-screen items-center px-6 pt-24"
+  >
     <div class="grid w-full items-center gap-12 lg:grid-cols-[0.9fr_1.1fr]">
       <div class="max-w-[560px] pt-8 lg:pt-0">
         <h1
@@ -24,34 +26,53 @@ import { Image } from 'astro:assets';
 
         <div class="mt-8">
           <a
-            href="https://t.me/sur_price_bot"
+            href="https://t.me/sur_price_bot/chat"
             target="_blank"
             rel="noopener noreferrer"
             class="inline-flex h-[62px] min-w-[250px] items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-[#6A5AF9] to-[#049fff] px-8 text-[22px] font-bold text-white shadow-lg transition-all duration-300 hover:scale-[1.02] hover:opacity-90 hover:shadow-xl"
           >
+            <span data-i18n="hero.cta">Try Now</span>
+
             <svg
               class="h-6 w-6"
-              viewBox="0 0 24 24"
+              viewBox="0 0 230 208"
               fill="none"
-              aria-hidden="true"
+              xmlns="http://www.w3.org/2000/svg"
             >
               <path
-                d="M5 19.5 19.5 5m0 0-5.2 14.2-3-6.5-6.3-2.9L19.5 5Z"
+                d="M68.7393 86.8555H161.261C176.921 86.8555 190 103.134 190 123.75V127.961C190 148.577 176.921 164.855 161.261 164.855H68.7393C53.0793 164.855 40.0001 148.577 40 127.961V123.75C40.0001 103.134 53.0793 86.8555 68.7393 86.8555Z"
                 stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"></path>
+                stroke-width="10"></path>
+              <path
+                d="M64.6377 121.479C71.7636 109.653 89.1044 110.244 95.4082 122.528L99.4131 130.332C99.7774 131.042 99.8899 131.854 99.7334 132.637C99.141 135.599 95.3451 136.498 93.4873 134.116L86.8232 125.572C82.9127 120.559 75.2764 120.729 71.5918 125.91L65.7617 134.109C64.3444 136.102 61.4292 136.224 59.8496 134.357C58.8122 133.131 58.6712 131.381 59.5 130.005L64.6377 121.479Z"
+                stroke="currentColor"
+                stroke-width="10"></path>
+              <path
+                d="M136.638 121.479C143.764 109.653 161.104 110.244 167.408 122.528L171.413 130.332C171.777 131.042 171.89 131.854 171.733 132.637C171.141 135.599 167.345 136.498 165.487 134.116L158.823 125.572C154.913 120.559 147.276 120.729 143.592 125.91L137.762 134.109C136.344 136.102 133.429 136.224 131.85 134.357C130.812 133.131 130.671 131.381 131.5 130.005L136.638 121.479Z"
+                stroke="currentColor"
+                stroke-width="10"></path>
+              <path
+                d="M114.5 1C123.613 1 131 8.3873 131 17.5C131 24.3045 126.881 30.1458 121 32.6689V44.8555H178C206.167 44.8555 229 67.6889 229 95.8555V155.855C229 184.022 206.167 206.855 178 206.855H52C23.8335 206.855 1 184.022 1 155.855V95.8555C1 67.6889 23.8335 44.8555 52 44.8555H108V32.6689C102.119 30.1458 98 24.3045 98 17.5C98 8.3873 105.387 1 114.5 1Z"
+                stroke="currentColor"
+                stroke-width="10"></path>
             </svg>
-            <span data-i18n="hero.cta">Try Now</span>
           </a>
         </div>
       </div>
 
       <div class="hidden min-h-[520px] items-center justify-center lg:flex">
         <div class="text-center text-lg font-medium text-slate-300">
-          <img src="/images/slider-placeholder.avif" alt="slider" class="w-full max-w-xl"/>
+          <Image
+            src="/images/slider-placeholder.avif"
+            alt="slider"
+            width="300"
+            height="400"
+          />
         </div>
       </div>
+    </div>
+    <div class="container overflow-hidden px-6 pt-24">
+      <CompaniesSlider />
     </div>
   </div>
 
