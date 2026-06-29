@@ -1,89 +1,106 @@
 ---
+import ShapeGrid from "@/components/backgrounds/ShapeGrid";
 const botUrl = "https://t.me/sur_price_bot/chat";
 
 const categories = [
   {
-    title: "Покупателям техники и электроники",
+    title: "Tech & Electronics Shoppers",
     icon: "/images/tech.png",
-    alt: "Техника и электроника",
+    alt: "Tech and electronics",
     accent: "#04a1fc",
-    headline: "Ловите лучшую цену на гаджеты",
-    stat: "Экономия до 30% на технике",
+    headline: "Get the best price on gadgets",
+    stat: "Save up to 30% on electronics",
     quote:
-      "Следите за ценой на ноутбук, смартфон или наушники — и покупайте ровно тогда, когда она падает.",
-    example: "Ноутбуки · смартфоны · наушники",
+      "Track prices on laptops, smartphones, or headphones — buy exactly when the price drops.",
+    example: "Laptops · smartphones · headphones",
   },
   {
-    title: "Охотникам за скидками",
+    title: "Deal Hunters",
     icon: "/images/shops.png",
-    alt: "Скидки и распродажи",
+    alt: "Deals and sales",
     accent: "#09aee7",
-    headline: "Не пропустите ни одной распродажи",
-    stat: "Уведомления о скидках в реальном времени",
+    headline: "Never miss a sale again",
+    stat: "Real-time discount alerts",
     quote:
-      "Добавьте товары из вишлиста — и получите сигнал в Telegram, как только цена опустится.",
-    example: "Вишлист · акции · промокоды",
+      "Add items from your wishlist and get a Telegram alert the moment the price drops.",
+    example: "Wishlist · sales · promos",
   },
   {
-    title: "Родителям",
+    title: "Parents",
     icon: "/images/childs.png",
-    alt: "Детские товары",
+    alt: "Children products",
     accent: "#11b2e0",
-    headline: "Покупайте детское дешевле",
-    stat: "Отслеживайте цены на товары для детей",
+    headline: "Buy kids' stuff for less",
+    stat: "Track prices on children's products",
     quote:
-      "Подгузники, игрушки и одежда — берите на пике скидки, а не по полной цене.",
-    example: "Подгузники · игрушки · одежда",
+      "Diapers, toys and clothes — grab them at peak discounts, not full price.",
+    example: "Diapers · toys · clothing",
   },
   {
-    title: "Продавцам на маркетплейсах",
+    title: "Marketplace Sellers",
     icon: "/images/marketplaces.png",
-    alt: "Маркетплейсы",
+    alt: "Marketplaces",
     accent: "#0ebad4",
-    headline: "Держите цены под контролем",
-    stat: "Мониторинг цен конкурентов 24/7",
+    headline: "Keep prices in check",
+    stat: "24/7 competitor price monitoring",
     quote:
-      "Смотрите, как меняются цены конкурентов, и корректируйте свои вовремя.",
-    example: "Wildberries · Ozon · Я.Маркет",
+      "See how competitors' prices change and adjust yours in time.",
+    example: "Amazon · Wildberries",
   },
   {
-    title: "Реселлерам и арбитражникам",
+    title: "Resellers & Arbitrageurs",
     icon: "/images/resail.png",
-    alt: "Перепродажа",
+    alt: "Resale",
     accent: "#13c3c4",
-    headline: "Находите выгодные сделки первыми",
-    stat: "Ловите ценовые просадки для перепродажи",
+    headline: "Find profitable deals first",
+    stat: "Catch price drops for resale",
     quote:
-      "Автоматически отслеживайте десятки товаров и зарабатывайте на разнице в цене.",
-    example: "Опт · перепродажа · арбитраж",
+      "Automatically track dozens of products and profit from price differences.",
+    example: "Wholesale · resale · arbitrage",
   },
   {
-    title: "Путешественникам",
+    title: "Travelers",
     icon: "/images/travel.png",
-    alt: "Путешествия",
+    alt: "Travel",
     accent: "#16c8bd",
-    headline: "Собирайтесь в поездку выгодно",
-    stat: "Цены на чемоданы, гаджеты и снаряжение",
+    headline: "Pack your trip on a budget",
+    stat: "Prices on luggage, gadgets & gear",
     quote:
-      "Подготовьтесь к путешествию, не переплачивая за экипировку и аксессуары.",
-    example: "Чемоданы · гаджеты · снаряжение",
+      "Prepare for your trip without overpaying for gear and accessories.",
+    example: "Luggage · gadgets · gear",
   },
 ];
 ---
 
-<section class="container mx-auto my-20 px-6 lg:my-32">
-  <header class="mb-16 text-center text-balance lg:mb-24">
-    <h2 class="mx-auto max-w-4xl text-3xl font-bold text-slate-900 md:text-5xl lg:text-6xl">
-      Кому пригодится SurPrice
+<section class="relative mx-auto py-20 px-6 lg:py-32">
+  <div class="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+    <ShapeGrid
+      client:load
+      shape="hexagon"
+      squareSize={200}
+      speed={0.2}
+      direction="up"
+      borderColor="#457de6"
+      hoverFillColor="#ffffff"
+      className="blur-sm opacity-70"
+    />
+  </div>
+  <div class="container px-6">
+      <div class="relative z-10 mb-16 text-center text-balance lg:mb-24">
+    <h2
+      data-i18n-html="usefulfor.titleHtml"
+      class="mx-auto max-w-4xl text-3xl font-bold text-slate-900 md:text-5xl lg:text-6xl"
+    >
+      Who Sur<span class="bg-gradient-to-r from-[#049fff] to-[#16C8BD] bg-clip-text text-transparent">Price</span> <span class="text-[#16C8BD]">Bot</span> Is For
     </h2>
-    <p class="mx-auto mt-5 max-w-2xl text-lg text-slate-500">
-      Один бот, который экономит деньги в самых разных задачах
+    <p data-i18n="usefulfor.subtitle" class="mx-auto mt-5 max-w-2xl text-lg text-slate-500">
+      One bot that saves money on everyday tasks
     </p>
-  </header>
+  </div>
 
-  <div class="grid grid-cols-1 gap-5">
+  <div class="relative z-10 grid grid-cols-1 gap-5">
     {
-      categories.map((c) => (
+      categories.map((c, i) => (
         <article
           class="grid grid-cols-1 overflow-hidden rounded-2xl border-t-8 bg-white shadow-lg md:sticky md:top-24 md:grid-cols-3"
           style={`border-color:${c.accent}`}
@@ -97,18 +114,19 @@ const categories = [
           <div class="grid grid-cols-1 gap-5 p-6 text-balance md:col-span-2 md:p-8 lg:grid-cols-3">
             <div class="flex h-full w-full flex-col gap-6 lg:col-span-2">
               <p
+                data-i18n={`usefulfor.cat${i + 1}.title`}
                 class="text-sm font-semibold uppercase tracking-wide"
                 style={`color:${c.accent}`}
               >
                 {c.title}
               </p>
 
-              <h3 class="text-2xl font-bold text-slate-900 xl:text-4xl">
+              <h3 data-i18n={`usefulfor.cat${i + 1}.headline`} class="text-2xl font-bold text-slate-900 xl:text-4xl">
                 {c.headline}
               </h3>
 
               <div class="flex flex-col gap-6 lg:mt-auto xl:flex-row xl:items-center xl:justify-between">
-                <p class="text-lg font-semibold text-slate-700 xl:text-2xl">
+                <p data-i18n={`usefulfor.cat${i + 1}.stat`} class="text-lg font-semibold text-slate-700 xl:text-2xl">
                   {c.stat}
                 </p>
 
@@ -119,7 +137,7 @@ const categories = [
                   class="group inline-flex w-fit shrink-0 items-center gap-4 rounded-full py-2 pl-5 pr-2 leading-none text-white transition-all hover:opacity-90 xl:self-end"
                   style={`background:${c.accent}`}
                 >
-                  <span class="text-sm font-medium">Начать отслеживать</span>
+                  <span data-i18n="usefulfor.cta" class="text-sm font-medium">Start Tracking</span>
                   <span class="flex aspect-square w-9 items-center justify-center rounded-full bg-black/20 transition-transform group-hover:scale-110">
                     <svg
                       viewBox="0 0 14 12"
@@ -134,14 +152,14 @@ const categories = [
             </div>
 
             <div class="flex flex-col gap-4 border-t border-slate-200 pt-5 text-sm lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
-              <blockquote class="text-slate-600 lg:mt-auto 2xl:text-base">
+              <blockquote data-i18n={`usefulfor.cat${i + 1}.quote`} class="text-slate-600 lg:mt-auto 2xl:text-base">
                 {c.quote}
               </blockquote>
                 <span
                   class="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium"
                   style={`background:${c.accent}1a;color:${c.accent}`}
                 >
-                  <span>{c.example}</span>
+                  <span data-i18n={`usefulfor.cat${i + 1}.example`}>{c.example}</span>
                 </span>
             </div>
           </div>
@@ -149,4 +167,6 @@ const categories = [
       ))
     }
   </div>
+  </div>
+
 </section>
