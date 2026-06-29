@@ -25,7 +25,7 @@ func ExtractPreview(pool *pgxpool.Pool, cfg *config.Config, log zerolog.Logger, 
 			return
 		}
 
-		fetcher := extractor.NewPageFetcher(rend)
+		fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies)
 		body, err := fetcher.Fetch(req.URL)
 		if err != nil {
 			http.Error(w, "failed to fetch page: "+err.Error(), http.StatusBadRequest)
@@ -52,14 +52,14 @@ func ExtractPreview(pool *pgxpool.Pool, cfg *config.Config, log zerolog.Logger, 
 func ExtractConfirm(pool *pgxpool.Pool, cfg *config.Config, log zerolog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			TrackerID          uuid.UUID `json:"tracker_id"`
-			SelectedPrice      string    `json:"selected_price"`
-			SelectedCurrency   string    `json:"selected_currency"`
-			ExtractionRule     json.RawMessage `json:"extraction_rule"`
-			ExtractionConfidence float64  `json:"extraction_confidence"`
-			Title              string    `json:"title"`
-			ImageURL           string    `json:"image_url"`
-			StockStatus        string    `json:"stock_status"`
+			TrackerID            uuid.UUID       `json:"tracker_id"`
+			SelectedPrice        string          `json:"selected_price"`
+			SelectedCurrency     string          `json:"selected_currency"`
+			ExtractionRule       json.RawMessage `json:"extraction_rule"`
+			ExtractionConfidence float64         `json:"extraction_confidence"`
+			Title                string          `json:"title"`
+			ImageURL             string          `json:"image_url"`
+			StockStatus          string          `json:"stock_status"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)

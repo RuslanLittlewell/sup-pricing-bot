@@ -296,6 +296,15 @@ func extractByRegex(htmlContent string) []PriceCandidate {
 		})
 	}
 
+	trailingCurrencyPrice := regexp.MustCompile(`(\d[\d\s,.]*(?:[.,]\d{2})?\s*(?:zł|PLN|€|EUR|\$|USD|£|GBP|₽|RUB))`)
+	if matches := trailingCurrencyPrice.FindString(htmlContent); matches != "" {
+		candidates = append(candidates, PriceCandidate{
+			Price:      strings.TrimSpace(matches),
+			Confidence: 0.3,
+			Label:      "Regex trailing currency match",
+		})
+	}
+
 	return candidates
 }
 

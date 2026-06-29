@@ -28,6 +28,7 @@ dotenv_get() {
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(dotenv_get TELEGRAM_BOT_TOKEN)}"
 BOT_USERNAME="${BOT_USERNAME:-$(dotenv_get BOT_USERNAME)}"
 BOT_USERNAME="${BOT_USERNAME:-sur_price_bot}"
+SCRAPER_COOKIES_FILE="${SCRAPER_COOKIES_FILE:-$(dotenv_get SCRAPER_COOKIES_FILE)}"
 
 if [[ -z "${TELEGRAM_BOT_TOKEN}" ]]; then
   echo "TELEGRAM_BOT_TOKEN is required. Export it or add it to .env." >&2
@@ -68,6 +69,15 @@ tar \
   --exclude='*.log' \
   -C "$PROJECT_ROOT" \
   -czf - . | run_remote "tar -xzf - -C '${DEPLOY_DIR}'"
+
+echo "Preparing scraper cookies on server..."
+run_remote "mkdir -p '${DEPLOY_DIR}/deploy/secrets' && chmod 700 '${DEPLOY_DIR}/deploy/secrets'"
+if [[ -n "${SCRAPER_COOKIES_FILE}" && -f "${SCRAPER_COOKIES_FILE}" ]]; then
+  tar -C "$(dirname "${SCRAPER_COOKIES_FILE}")" -czf - "$(basename "${SCRAPER_COOKIES_FILE}")" | \
+    run_remote "tar -xzf - -C '${DEPLOY_DIR}/deploy/secrets' && mv '${DEPLOY_DIR}/deploy/secrets/$(basename "${SCRAPER_COOKIES_FILE}")' '${DEPLOY_DIR}/deploy/secrets/scraper-cookies.json' && chmod 600 '${DEPLOY_DIR}/deploy/secrets/scraper-cookies.json'"
+else
+  run_remote "if [[ ! -f '${DEPLOY_DIR}/deploy/secrets/scraper-cookies.json' ]]; then printf '%s\n' '{\"cookies\":[]}' > '${DEPLOY_DIR}/deploy/secrets/scraper-cookies.json'; chmod 600 '${DEPLOY_DIR}/deploy/secrets/scraper-cookies.json'; fi"
+fi
 
 echo "Preparing production env on server..."
 run_remote "cd '${DEPLOY_DIR}' && \

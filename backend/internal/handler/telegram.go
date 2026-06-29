@@ -76,11 +76,11 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 		case text == "/list" || strings.EqualFold(strings.TrimSpace(text), "посмотреть мои трекеры"):
 			handleListTrackers(ctx, pool, tg, from.ID, userID, log)
 		case strings.HasPrefix(text, "/add "):
-			handleAddTracker(ctx, pool, tg, from.ID, userID, text[5:], log, rend)
+			handleAddTracker(ctx, pool, tg, from.ID, userID, text[5:], log, rend, cfg.ScraperCookies)
 		case strings.HasPrefix(text, "/delete "):
 			handleDeleteTracker(ctx, pool, tg, from.ID, userID, text[8:], log)
 		case strings.HasPrefix(text, "/check "):
-			handleCheckTracker(ctx, pool, tg, from.ID, userID, text[7:], log, rend)
+			handleCheckTracker(ctx, pool, tg, from.ID, userID, text[7:], log, rend, cfg.ScraperCookies)
 		case strings.HasPrefix(text, "/history "):
 			handleTrackerHistory(ctx, pool, tg, from.ID, userID, text[9:], log)
 		case handleTrackerDialog(ctx, pool, tg, from.ID, userID, text, log, rend):
@@ -515,7 +515,17 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	caption := fmt.Sprintf("Нашёл этот блок с ценой %s.\nЭто правильная цена?", formatMoney(price))
 	if err := tg.SendPhotoWithMarkup(chatID, screenshot, caption, markup); err != nil {
 		log.Error().Err(err).Msg("failed to send price screenshot")
-		_ = tg.SendMessageWithMarkup(chatID, caption, markup)
+		if docErr := tg.SendDocumentWithMarkup(chatID, screenshot, caption, markup); docErr != nil {
+			log.Error().Err(docErr).Msg("failed to send price screenshot as document")
+			_ = tg.SendMessageWithMarkup(chatID, caption, markup)
+			return
+		}
+		log.Info().
+			Int64("telegram_id", chatID).
+			Str("url", url).
+			Int("candidate_index", index).
+			Int("screenshot_bytes", len(screenshot)).
+			Msg("telegram price screenshot sent as document")
 		return
 	}
 	log.Info().
@@ -607,8 +617,8 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	_ = tg.SendMessageWithMarkup(chatID, msg, makeInlineKeyboard(rowsMarkup...))
 }
 
-func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, url string, log zerolog.Logger, rend *renderer.Renderer) {
-	fetcher := extractor.NewPageFetcher(rend)
+func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, url string, log zerolog.Logger, rend *renderer.Renderer, cookiesFile string) {
+	fetcher := extractor.NewPageFetcher(rend, cookiesFile)
 	body, err := fetcher.Fetch(url)
 	if err != nil {
 		SendTelegramMessage(tg, chatID, "Не удалось загрузить страницу: "+err.Error())
@@ -673,7 +683,7 @@ func handleDeleteTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 	SendTelegramMessage(tg, chatID, "✅ Трекер удалён.")
 }
 
-func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, trackerID string, log zerolog.Logger, rend *renderer.Renderer) {
+func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, trackerID string, log zerolog.Logger, rend *renderer.Renderer, cookiesFile string) {
 	var url, currency string
 	err := pool.QueryRow(ctx, `SELECT url, currency FROM trackers WHERE id::text LIKE $1 || '%' AND user_id = $2`, trackerID, userID).Scan(&url, &currency)
 	if err != nil {
@@ -681,7 +691,7 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 		return
 	}
 
-	fetcher := extractor.NewPageFetcher(rend)
+	fetcher := extractor.NewPageFetcher(rend, cookiesFile)
 	body, err := fetcher.Fetch(url)
 	if err != nil {
 		SendTelegramMessage(tg, chatID, "Не удалось загрузить страницу.")

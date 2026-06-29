@@ -41,7 +41,7 @@ func main() {
 		}
 	}
 
-	rend, err := renderer.New()
+	rend, err := renderer.New(cfg.ScraperCookies)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to start headless browser")
 	}

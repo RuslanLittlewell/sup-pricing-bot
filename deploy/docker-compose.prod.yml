@@ -48,6 +48,9 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       BOT_USERNAME: ${BOT_USERNAME}
       TELEGRAM_WEBHOOK_URL: https://${API_DOMAIN}/api/telegram/webhook
+      SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
+    volumes:
+      - ./secrets/scraper-cookies.json:/run/secrets/scraper-cookies.json:ro
     ports:
       - "127.0.0.1:${BACKEND_HOST_PORT:-18080}:8080"
     depends_on:
@@ -68,6 +71,9 @@ services:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/price_tracker?sslmode=disable
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       BOT_USERNAME: ${BOT_USERNAME}
+      SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
+    volumes:
+      - ./secrets/scraper-cookies.json:/run/secrets/scraper-cookies.json:ro
     depends_on:
       db:
         condition: service_healthy

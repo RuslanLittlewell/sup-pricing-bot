@@ -14,6 +14,7 @@ type Config struct {
 	BotUsername     string
 	AdminToken      string
 	SessionSecret   string
+	ScraperCookies  string
 
 	AppName    string
 	AppURL     string
@@ -30,6 +31,7 @@ func Load() *Config {
 		BotUsername:     getEnv("BOT_USERNAME", ""),
 		AdminToken:      getEnv("ADMIN_TOKEN", "admin-secret"),
 		SessionSecret:   getEnv("SESSION_SECRET", "change-me-in-production"),
+		ScraperCookies:  getEnv("SCRAPER_COOKIES_FILE", ""),
 		AppName:         getEnv("APP_NAME", "Price Tracker"),
 		AppURL:          getEnv("APP_URL", "http://localhost:3000"),
 		CORSOrigin:      getEnv("CORS_ORIGIN", "http://localhost:3000"),

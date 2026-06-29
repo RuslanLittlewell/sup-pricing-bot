@@ -117,6 +117,14 @@ func (c *Client) SendPhoto(chatID int64, photo []byte, caption string) error {
 }
 
 func (c *Client) SendPhotoWithMarkup(chatID int64, photo []byte, caption string, replyMarkup json.RawMessage) error {
+	return c.sendMultipart("sendPhoto", "photo", "price-block.png", chatID, photo, caption, replyMarkup)
+}
+
+func (c *Client) SendDocumentWithMarkup(chatID int64, document []byte, caption string, replyMarkup json.RawMessage) error {
+	return c.sendMultipart("sendDocument", "document", "price-block.png", chatID, document, caption, replyMarkup)
+}
+
+func (c *Client) sendMultipart(method, fileField, fileName string, chatID int64, file []byte, caption string, replyMarkup json.RawMessage) error {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -137,18 +145,18 @@ func (c *Client) SendPhotoWithMarkup(chatID int64, photo []byte, caption string,
 		}
 	}
 
-	part, err := writer.CreateFormFile("photo", "price-block.png")
+	part, err := writer.CreateFormFile(fileField, fileName)
 	if err != nil {
-		return fmt.Errorf("create photo form: %w", err)
+		return fmt.Errorf("create %s form: %w", fileField, err)
 	}
-	if _, err := part.Write(photo); err != nil {
-		return fmt.Errorf("write photo: %w", err)
+	if _, err := part.Write(file); err != nil {
+		return fmt.Errorf("write %s: %w", fileField, err)
 	}
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("close multipart: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", c.BaseURL()+"/sendPhoto", &body)
+	req, err := http.NewRequest("POST", c.BaseURL()+"/"+method, &body)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -156,7 +164,7 @@ func (c *Client) SendPhotoWithMarkup(chatID int64, photo []byte, caption string,
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("send photo: %w", err)
+		return fmt.Errorf("%s: %w", method, err)
 	}
 	defer resp.Body.Close()
 

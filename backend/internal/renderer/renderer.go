@@ -3,15 +3,27 @@ package renderer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+
+	"github.com/littlewell/price-tracker/internal/scraper"
 )
+
+const browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+const acceptLanguage = "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"
 
 type Renderer struct {
 	allocCtx context.Context
 	cancel   context.CancelFunc
+	cookies  []scraper.Cookie
 }
 
 type PriceBlockCandidate struct {
@@ -21,7 +33,7 @@ type PriceBlockCandidate struct {
 	TotalFound int    `json:"total_found"`
 }
 
-func New() (*Renderer, error) {
+func New(cookiesFile string) (*Renderer, error) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath("/usr/bin/chromium"),
 		chromedp.Flag("headless", true),
@@ -29,13 +41,21 @@ func New() (*Renderer, error) {
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-setuid-sandbox", true),
-		chromedp.Flag("disable-web-security", true),
-		chromedp.Flag("disable-features", "VizDisplayCompositor"),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("enable-automation", false),
+		chromedp.Flag("disable-features", "VizDisplayCompositor,IsolateOrigins,site-per-process"),
 		chromedp.Flag("window-size", "1920,1080"),
+		chromedp.Flag("lang", "pl-PL"),
+		chromedp.UserAgent(browserUserAgent),
 	)
 
+	cookies, err := scraper.LoadCookies(cookiesFile)
+	if err != nil {
+		return nil, err
+	}
+
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	return &Renderer{allocCtx: allocCtx, cancel: cancel}, nil
+	return &Renderer{allocCtx: allocCtx, cancel: cancel, cookies: cookies}, nil
 }
 
 func (r *Renderer) Close() {
@@ -53,7 +73,12 @@ func (r *Renderer) Render(ctx context.Context, url string, waitTime time.Duratio
 
 	var html string
 	tasks := []chromedp.Action{
+		setupRealBrowser(),
+		r.setCookies(),
 		chromedp.Navigate(url),
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		acceptCookieBanners(),
+		simulateUserActivity(),
 		chromedp.Sleep(waitTime),
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &html),
 	}
@@ -188,8 +213,12 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
 })()`, string(priceJSON), index)
 
 	if err := chromedp.Run(ctx,
+		setupRealBrowser(),
+		r.setCookies(),
 		chromedp.Navigate(url),
 		chromedp.WaitReady("body", chromedp.ByQuery),
+		acceptCookieBanners(),
+		simulateUserActivity(),
 		chromedp.Sleep(6*time.Second),
 		chromedp.Evaluate(script, &candidate),
 	); err != nil {
@@ -218,7 +247,12 @@ func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (st
 
 	var text string
 	if err := chromedp.Run(ctx,
+		setupRealBrowser(),
+		r.setCookies(),
 		chromedp.Navigate(url),
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		acceptCookieBanners(),
+		simulateUserActivity(),
 		chromedp.Sleep(3*time.Second),
 		chromedp.Text(selector, &text, chromedp.ByQuery),
 	); err != nil {
@@ -226,4 +260,115 @@ func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (st
 	}
 
 	return text, nil
+}
+
+func setupRealBrowser() chromedp.Action {
+	headers := network.Headers{
+		"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+		"Accept-Language":           acceptLanguage,
+		"Cache-Control":             "no-cache",
+		"Pragma":                    "no-cache",
+		"Sec-CH-UA":                 `"Chromium";v="126", "Google Chrome";v="126", "Not-A.Brand";v="99"`,
+		"Sec-CH-UA-Mobile":          "?0",
+		"Sec-CH-UA-Platform":        `"Windows"`,
+		"Sec-Fetch-Dest":            "document",
+		"Sec-Fetch-Mode":            "navigate",
+		"Sec-Fetch-Site":            "none",
+		"Sec-Fetch-User":            "?1",
+		"Upgrade-Insecure-Requests": "1",
+	}
+
+	return chromedp.Tasks{
+		network.Enable(),
+		network.SetExtraHTTPHeaders(headers),
+		emulation.SetUserAgentOverride(browserUserAgent).
+			WithAcceptLanguage(acceptLanguage).
+			WithPlatform("Windows"),
+		emulation.SetLocaleOverride().WithLocale("pl-PL"),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_, err := page.AddScriptToEvaluateOnNewDocument(`
+Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+Object.defineProperty(navigator, "languages", { get: () => ["pl-PL", "pl", "en-US", "en"] });
+Object.defineProperty(navigator, "platform", { get: () => "Win32" });
+Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+window.chrome = window.chrome || { runtime: {} };
+const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
+if (originalQuery) {
+  window.navigator.permissions.query = (parameters) => (
+    parameters && parameters.name === "notifications"
+      ? Promise.resolve({ state: Notification.permission })
+      : originalQuery(parameters)
+  );
+}
+`).Do(ctx)
+			return err
+		}),
+	}
+}
+
+func (r *Renderer) setCookies() chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		if len(r.cookies) == 0 {
+			return nil
+		}
+
+		params := make([]*network.CookieParam, 0, len(r.cookies))
+		for _, cookie := range r.cookies {
+			param := &network.CookieParam{
+				Name:     cookie.Name,
+				Value:    cookie.Value,
+				Domain:   cookie.Domain,
+				Path:     cookie.Path,
+				Secure:   cookie.Secure,
+				HTTPOnly: cookie.HTTPOnly,
+			}
+			if !cookie.Session && cookie.ExpirationDate > 0 {
+				expires := cdp.TimeSinceEpoch(time.Unix(int64(cookie.ExpirationDate), 0))
+				param.Expires = &expires
+			}
+			switch cookie.SameSite {
+			case "lax":
+				param.SameSite = network.CookieSameSiteLax
+			case "strict":
+				param.SameSite = network.CookieSameSiteStrict
+			case "no_restriction", "none":
+				param.SameSite = network.CookieSameSiteNone
+			}
+			params = append(params, param)
+		}
+
+		if err := network.SetCookies(params).Do(ctx); err != nil {
+			return errors.New("set scraper cookies: " + err.Error())
+		}
+		return nil
+	})
+}
+
+func acceptCookieBanners() chromedp.Action {
+	return chromedp.Evaluate(`(() => {
+  const labels = [
+    "akceptuję", "akceptuje", "zaakceptuj", "zgadzam", "accept", "agree",
+    "i agree", "allow all", "accept all", "przejdź do serwisu"
+  ];
+  const candidates = [...document.querySelectorAll("button, a, [role='button'], input[type='button'], input[type='submit']")];
+  for (const el of candidates) {
+    const text = ((el.innerText || el.textContent || el.value || el.getAttribute("aria-label") || "") + "").trim().toLowerCase();
+    if (!text) continue;
+    if (labels.some((label) => text.includes(label))) {
+      el.click();
+      return true;
+    }
+  }
+  return false;
+})()`, nil)
+}
+
+func simulateUserActivity() chromedp.Action {
+	return chromedp.Evaluate(`new Promise((resolve) => {
+  window.scrollTo({ top: Math.floor(window.innerHeight * 0.35), behavior: "smooth" });
+  setTimeout(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    resolve(true);
+  }, 700);
+})`, nil)
 }
