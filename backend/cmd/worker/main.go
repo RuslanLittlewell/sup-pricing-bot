@@ -131,7 +131,7 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 
 	log.Info().Str("tracker_id", id).Str("url", url).Msg("checking tracker")
 
-	newPrice, newCurrency, stockStatus, err := extractTrackerPrice(ctx, rend, fetcher, zara, generic, url, extractionRuleJSON, currency)
+	newPrice, newCurrency, stockStatus, err := extractTrackerPrice(ctx, rend, fetcher, zara, generic, url, extractionRuleJSON, currency, currentPrice)
 	if err != nil {
 		log.Error().Err(err).Str("tracker_id", id).Msg("extraction failed")
 		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
@@ -193,19 +193,20 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 
 func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
 	zara *extractor.ZaraExtractor, generic *extractor.GenericExtractor,
-	url string, extractionRuleJSON []byte, fallbackCurrency string) (float64, string, string, error) {
+	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, error) {
 
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
 		var rule struct {
-			Type     string `json:"type"`
-			Selector string `json:"selector"`
+			Type            string `json:"type"`
+			Selector        string `json:"selector"`
+			PriceTokenIndex *int   `json:"price_token_index"`
 		}
 		if err := json.Unmarshal(extractionRuleJSON, &rule); err == nil && rule.Type == "css_text" && rule.Selector != "" {
 			text, err := rend.TextBySelector(ctx, url, rule.Selector)
 			if err != nil {
 				return 0, "", "", fmt.Errorf("rule extraction failed: %w", err)
 			}
-			price, ok := parsePriceFromText(text)
+			price, ok := parsePriceFromTextAtIndex(text, rule.PriceTokenIndex, referencePrice)
 			if !ok {
 				return 0, "", "", fmt.Errorf("failed to parse price from selected block")
 			}
@@ -274,11 +275,41 @@ func handleExtractionError(ctx context.Context, pool *pgxpool.Pool, id, errMsg s
 }
 
 func parsePriceFromText(text string) (float64, bool) {
-	re := regexp.MustCompile(`\d+(?:[\s.,]\d+)*`)
-	match := re.FindString(text)
-	if match == "" {
+	price, ok := parsePriceFromTextAtIndex(text, nil, nil)
+	return price, ok
+}
+
+func parsePriceFromTextAtIndex(text string, tokenIndex *int, referencePrice *float64) (float64, bool) {
+	prices := parsePriceTokensFromText(text)
+	if len(prices) == 0 {
 		return 0, false
 	}
+	if tokenIndex != nil && *tokenIndex >= 0 && *tokenIndex < len(prices) {
+		return prices[*tokenIndex], true
+	}
+	if referencePrice != nil {
+		for _, price := range prices {
+			if priceCents(price) == priceCents(*referencePrice) {
+				return price, true
+			}
+		}
+	}
+	return prices[0], true
+}
+
+func parsePriceTokensFromText(text string) []float64 {
+	re := regexp.MustCompile(`\d+(?:[\s.,]\d+)*`)
+	matches := re.FindAllString(text, -1)
+	prices := make([]float64, 0, len(matches))
+	for _, match := range matches {
+		if price, ok := parsePriceToken(match); ok {
+			prices = append(prices, price)
+		}
+	}
+	return prices
+}
+
+func parsePriceToken(match string) (float64, bool) {
 	normalized := strings.ReplaceAll(match, " ", "")
 	if strings.Count(normalized, ",") == 1 && strings.Count(normalized, ".") == 0 {
 		normalized = strings.ReplaceAll(normalized, ",", ".")
@@ -287,4 +318,8 @@ func parsePriceFromText(text string) (float64, bool) {
 	}
 	price, err := strconv.ParseFloat(normalized, 64)
 	return price, err == nil && price > 0
+}
+
+func priceCents(price float64) int64 {
+	return int64(price*100 + 0.5)
 }

@@ -31,10 +31,13 @@ type Renderer struct {
 }
 
 type PriceBlockCandidate struct {
-	Selector   string `json:"selector"`
-	Text       string `json:"text"`
-	Title      string `json:"title"`
-	TotalFound int    `json:"total_found"`
+	Selector           string `json:"selector"`
+	ScreenshotSelector string `json:"screenshot_selector"`
+	Text               string `json:"text"`
+	PriceText          string `json:"price_text"`
+	PriceTokenIndex    int    `json:"price_token_index"`
+	Title              string `json:"title"`
+	TotalFound         int    `json:"total_found"`
 }
 
 func New(cookiesFile, proxyURL string) (*Renderer, error) {
@@ -155,7 +158,7 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
     let match;
     while ((match = re.exec(String(text || "")))) {
       const normalized = normalizePrice(match[0]);
-      if (normalized) tokens.push(normalized);
+      if (normalized) tokens.push({ raw: match[0], normalized });
     }
     return tokens;
   };
@@ -176,7 +179,11 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
   ].join(" ").replace(/\s+/g, " ").trim();
   const matches = (text) => {
     if (!target) return false;
-    return priceTokens(text).some((token) => token === target);
+    return priceTokens(text).some((token) => token.normalized === target);
+  };
+  const tokenIndex = (text) => {
+    if (!target) return -1;
+    return priceTokens(text).findIndex((token) => token.normalized === target);
   };
   const cssPath = (el) => {
     const parts = [];
@@ -211,42 +218,95 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
     }
     return block;
   };
+  const screenshotBlock = (el) => {
+    const isTextAtom = (node) => {
+      return ["SPAN", "P", "B", "STRONG", "EM", "SMALL"].includes(node.tagName);
+    };
+
+    const minDepth = isTextAtom(el) ? 3 : 1;
+    let block = el;
+    let best = null;
+
+    for (let depth = 0; depth < 7 && block; depth++) {
+      if (depth >= minDepth && visible(block)) {
+        const text = textOf(block);
+        const rect = block.getBoundingClientRect();
+        const usable =
+          text.length <= 1400 &&
+          rect.width <= window.innerWidth * 0.98 &&
+          rect.height <= window.innerHeight * 0.98 &&
+          rect.width >= 180 &&
+          rect.height >= 36;
+
+        if (usable) {
+          best = block;
+          if (rect.width >= 260 && rect.height >= 64) break;
+        }
+      }
+
+      block = block.parentElement;
+    }
+
+    if (best) return best;
+
+    block = bestBlock(el);
+    for (let i = 0; i < 3 && block.parentElement; i++) {
+      const parent = block.parentElement;
+      const parentText = textOf(parent);
+      const rect = parent.getBoundingClientRect();
+      if (parentText.length > 1200 || rect.width > window.innerWidth * 0.98 || rect.height > window.innerHeight * 0.98) break;
+      block = parent;
+      if (rect.width >= 260 && rect.height >= 72) break;
+    }
+    return block;
+  };
   const blocks = [];
-  const addBlock = (el) => {
+  const addBlock = (el, sourceText = "") => {
     if (!el || !visible(el)) return;
-    const block = bestBlock(el);
-    if (!visible(block)) return;
+    const priceEl = el;
+    const block = screenshotBlock(el);
+    if (!visible(priceEl) || !visible(block)) return;
     const rect = block.getBoundingClientRect();
     if (rect.width > window.innerWidth * 0.96 || rect.height > window.innerHeight * 0.95) return;
-    if (blocks.some((b) => b === block || b.contains(block) || block.contains(b))) return;
-    blocks.push(block);
+    const priceText = (sourceText || textOf(priceEl)).replace(/\s+/g, " ").trim();
+    const idx = tokenIndex(priceText);
+    if (idx < 0) return;
+    if (blocks.some((b) => b.priceEl === priceEl || b.block === block || b.block.contains(block) || block.contains(b.block))) return;
+    blocks.push({ priceEl, block, priceText, tokenIndex: idx });
   };
 
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   let textNode;
   while ((textNode = walker.nextNode())) {
     const text = (textNode.nodeValue || "").trim();
-    if (text && text.length <= 260 && matches(text)) addBlock(textNode.parentElement);
+    if (text && text.length <= 260 && matches(text)) addBlock(textNode.parentElement, text);
   }
 
   for (const node of document.querySelectorAll("body *")) {
     if (!visible(node)) continue;
     const text = textOf(node);
     if (!text || text.length > 700) continue;
-    if (matches(text)) addBlock(node);
+    if (matches(text)) addBlock(node, text);
   }
-  const block = blocks[%d];
-  if (!block) return {
+  const item = blocks[%d];
+  if (!item) return {
     selector: "",
+    screenshot_selector: "",
     text: (document.body?.innerText || document.body?.textContent || "").trim().slice(0, 500),
+    price_text: "",
+    price_token_index: -1,
     title: document.title || "",
     total_found: blocks.length
   };
-  block.setAttribute("data-price-tracker-candidate", "selected");
-  block.scrollIntoView({ block: "center", inline: "center" });
+  item.priceEl.setAttribute("data-price-tracker-price-candidate", "selected");
+  item.block.setAttribute("data-price-tracker-candidate", "selected");
+  item.block.scrollIntoView({ block: "center", inline: "center" });
   return {
-    selector: cssPath(block),
-    text: (block.innerText || block.textContent || "").trim().slice(0, 500),
+    selector: cssPath(item.priceEl),
+    screenshot_selector: cssPath(item.block),
+    text: (item.block.innerText || item.block.textContent || "").trim().slice(0, 500),
+    price_text: item.priceText.slice(0, 500),
+    price_token_index: item.tokenIndex,
     title: document.title || "",
     total_found: blocks.length
   };

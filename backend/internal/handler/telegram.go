@@ -725,15 +725,21 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		Int64("telegram_id", chatID).
 		Str("url", url).
 		Str("selector", candidate.Selector).
+		Str("screenshot_selector", candidate.ScreenshotSelector).
+		Str("price_text", truncate(candidate.PriceText, 180)).
+		Int("price_token_index", candidate.PriceTokenIndex).
 		Str("text", truncate(candidate.Text, 180)).
 		Int("candidate_index", index).
 		Int("total_found", candidate.TotalFound).
 		Int("screenshot_bytes", len(screenshot)).
 		Msg("telegram price block candidate found")
 
-	rule, _ := json.Marshal(map[string]string{
-		"type":     "css_text",
-		"selector": candidate.Selector,
+	rule, _ := json.Marshal(map[string]interface{}{
+		"type":                "css_text",
+		"selector":            candidate.Selector,
+		"screenshot_selector": candidate.ScreenshotSelector,
+		"price_text":          candidate.PriceText,
+		"price_token_index":   candidate.PriceTokenIndex,
 	})
 
 	_, err = pool.Exec(ctx, `
@@ -752,6 +758,8 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		Int64("telegram_id", chatID).
 		Str("url", url).
 		Str("selector", candidate.Selector).
+		Str("price_text", truncate(candidate.PriceText, 180)).
+		Int("price_token_index", candidate.PriceTokenIndex).
 		Int("candidate_index", index).
 		Msg("telegram price candidate state saved")
 
