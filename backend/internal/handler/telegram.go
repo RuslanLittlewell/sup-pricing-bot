@@ -25,7 +25,6 @@ var botTexts = map[string]map[string]string{
 		"choose_language":         "Choose your language",
 		"language_saved":          "Language saved. Send a product link to start tracking.",
 		"account_not_linked":      "Account is not linked. Press /start.",
-		"account_not_linked_site": "Account is not linked. Link Telegram on the website first: Profile → Link Telegram.",
 		"link_invalid":            "The code is invalid or expired. Request a new one on the website.",
 		"link_failed":             "Linking failed. Please try again.",
 		"link_success":            "✅ Telegram linked. Choose your language.",
@@ -44,6 +43,21 @@ var botTexts = map[string]map[string]string{
 		"stock_tracker_created":   "✅ Tracker created!\n\n<b>%s</b>\n🔗 %s\n📦 %s\nI will notify you when this changes.\nID: <code>%s</code>",
 		"button_new_tracker":      "➕ New tracker",
 		"button_trackers":         "My trackers",
+		"button_plans":            "💳 Pricing",
+		"plan_free_name":          "Free",
+		"plan_free_tagline":       "For getting started",
+		"plan_free_trackers":      "Up to 3 trackers",
+		"plan_free_interval":      "Scan every 3+ hours",
+		"plan_basic_name":         "Basic",
+		"plan_basic_tagline":      "For regular shoppers",
+		"plan_basic_trackers":     "Up to 10 trackers",
+		"plan_basic_interval":     "Scan every 1+ hour",
+		"plan_pro_name":           "Pro",
+		"plan_pro_tagline":        "For power users & resellers",
+		"plan_pro_trackers":       "Up to 50 trackers",
+		"plan_pro_interval":       "Scan every 30+ minutes",
+		"button_activate":         "Activate",
+		"plan_free_active":        "✅ Free is your current plan — already active, nothing to do here. Need more trackers or faster scans? Pick Basic or Pro above.",
 		"button_back":             "Back",
 		"button_yes":              "Yes",
 		"button_no":               "No",
@@ -91,7 +105,6 @@ var botTexts = map[string]map[string]string{
 		"choose_language":         "Выберите язык",
 		"language_saved":          "Язык сохранён. Отправьте ссылку товара для трекинга.",
 		"account_not_linked":      "Аккаунт не привязан. Нажмите /start.",
-		"account_not_linked_site": "Аккаунт не привязан. Сначала привяжите Telegram на сайте: Профиль → Привязать Telegram.",
 		"link_invalid":            "Код недействителен или истёк. Запросите новый на сайте.",
 		"link_failed":             "Ошибка при привязке. Попробуйте снова.",
 		"link_success":            "✅ Telegram привязан. Выберите язык.",
@@ -110,6 +123,21 @@ var botTexts = map[string]map[string]string{
 		"stock_tracker_created":   "✅ Трекер создан!\n\n<b>%s</b>\n🔗 %s\n📦 %s\nСообщу, когда это изменится.\nID: <code>%s</code>",
 		"button_new_tracker":      "➕ Новый трекер",
 		"button_trackers":         "Мои трекеры",
+		"button_plans":            "💳 Тарифы",
+		"plan_free_name":          "Free",
+		"plan_free_tagline":       "Чтобы начать",
+		"plan_free_trackers":      "До 3 трекеров",
+		"plan_free_interval":      "Проверка раз в 3+ часа",
+		"plan_basic_name":         "Basic",
+		"plan_basic_tagline":      "Для активных покупателей",
+		"plan_basic_trackers":     "До 10 трекеров",
+		"plan_basic_interval":     "Проверка раз в 1+ час",
+		"plan_pro_name":           "Pro",
+		"plan_pro_tagline":        "Для профи и продавцов",
+		"plan_pro_trackers":       "До 50 трекеров",
+		"plan_pro_interval":       "Проверка раз в 30+ минут",
+		"button_activate":         "Активировать",
+		"plan_free_active":        "✅ Free — ваш текущий тариф, он уже активен, ничего делать не нужно. Нужно больше трекеров или более частые проверки? Выберите Basic или Pro выше.",
 		"button_back":             "Назад",
 		"button_yes":              "Да",
 		"button_no":               "Нет",
@@ -157,7 +185,6 @@ var botTexts = map[string]map[string]string{
 		"choose_language":         "Wybierz język",
 		"language_saved":          "Język zapisany. Wyślij link do produktu, aby rozpocząć śledzenie.",
 		"account_not_linked":      "Konto nie jest połączone. Naciśnij /start.",
-		"account_not_linked_site": "Konto nie jest połączone. Najpierw połącz Telegram na stronie: Profil → Połącz Telegram.",
 		"link_invalid":            "Kod jest nieprawidłowy albo wygasł. Poproś o nowy na stronie.",
 		"link_failed":             "Nie udało się połączyć. Spróbuj ponownie.",
 		"link_success":            "✅ Telegram połączony. Wybierz język.",
@@ -176,6 +203,21 @@ var botTexts = map[string]map[string]string{
 		"stock_tracker_created":   "✅ Tracker utworzony!\n\n<b>%s</b>\n🔗 %s\n📦 %s\nPowiadomię, gdy to się zmieni.\nID: <code>%s</code>",
 		"button_new_tracker":      "➕ Nowy tracker",
 		"button_trackers":         "Moje trackery",
+		"button_plans":            "💳 Cennik",
+		"plan_free_name":          "Free",
+		"plan_free_tagline":       "Na początek",
+		"plan_free_trackers":      "Do 3 trackerów",
+		"plan_free_interval":      "Sprawdzanie co 3+ godziny",
+		"plan_basic_name":         "Basic",
+		"plan_basic_tagline":      "Dla aktywnych kupujących",
+		"plan_basic_trackers":     "Do 10 trackerów",
+		"plan_basic_interval":     "Sprawdzanie co 1+ godzinę",
+		"plan_pro_name":           "Pro",
+		"plan_pro_tagline":        "Dla profesjonalistów i sprzedawców",
+		"plan_pro_trackers":       "Do 50 trackerów",
+		"plan_pro_interval":       "Sprawdzanie co 30+ minut",
+		"button_activate":         "Aktywuj",
+		"plan_free_active":        "✅ Free to Twój obecny plan — jest już aktywny, nic nie trzeba robić. Potrzebujesz więcej trackerów lub szybszych sprawdzeń? Wybierz Basic albo Pro powyżej.",
 		"button_back":             "Wstecz",
 		"button_yes":              "Tak",
 		"button_no":               "Nie",
@@ -401,7 +443,8 @@ func handleStartAndLink(pool *pgxpool.Pool, tg *telegram.Client, from telegram.U
 
 type inlineButton struct {
 	Text         string `json:"text"`
-	CallbackData string `json:"callback_data"`
+	CallbackData string `json:"callback_data,omitempty"`
+	URL          string `json:"url,omitempty"`
 }
 
 type inlineKeyboard struct {
@@ -417,6 +460,10 @@ func button(text, data string) inlineButton {
 	return inlineButton{Text: text, CallbackData: data}
 }
 
+func linkButton(text, url string) inlineButton {
+	return inlineButton{Text: text, URL: url}
+}
+
 func sendLanguageMenu(tg *telegram.Client, chatID int64) {
 	markup := makeInlineKeyboard(
 		[]inlineButton{button("English", "lang:en")},
@@ -429,9 +476,40 @@ func sendMainMenu(tg *telegram.Client, chatID int64, lang, text string) {
 	markup := makeInlineKeyboard(
 		[]inlineButton{button(tr(lang, "button_new_tracker"), "menu:new")},
 		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
+		[]inlineButton{button(tr(lang, "button_plans"), "menu:plans")},
 		[]inlineButton{button(tr(lang, "button_choose_language"), "menu:language")},
 	)
 	_ = tg.SendMessageWithMarkup(chatID, text, markup)
+}
+
+// tributeSubscriptionURL maps a paid plan code to its Tribute Mini App subscription
+// link (opens Telegram's built-in Tribute app to the specific product/tier).
+var tributeSubscriptionURL = map[string]string{
+	"basic": "https://t.me/tribute/app?startapp=sZIM",
+	"pro":   "https://t.me/tribute/app?startapp=sZIL",
+}
+
+func sendPlansMenu(tg *telegram.Client, chatID int64, lang string) {
+	plans := []struct {
+		code, nameKey, taglineKey, trackersKey, intervalKey string
+	}{
+		{"free", "plan_free_name", "plan_free_tagline", "plan_free_trackers", "plan_free_interval"},
+		{"basic", "plan_basic_name", "plan_basic_tagline", "plan_basic_trackers", "plan_basic_interval"},
+		{"pro", "plan_pro_name", "plan_pro_tagline", "plan_pro_trackers", "plan_pro_interval"},
+	}
+	for i, p := range plans {
+		text := fmt.Sprintf("💳 <b>%s</b>\n<i>%s</i>\n\n📦 %s\n⏱ %s",
+			tr(lang, p.nameKey), tr(lang, p.taglineKey), tr(lang, p.trackersKey), tr(lang, p.intervalKey))
+		activateBtn := button(tr(lang, "button_activate"), "plan:"+p.code)
+		if url, ok := tributeSubscriptionURL[p.code]; ok {
+			activateBtn = linkButton(tr(lang, "button_activate"), url)
+		}
+		rows := [][]inlineButton{{activateBtn}}
+		if i == len(plans)-1 {
+			rows = append(rows, []inlineButton{button(tr(lang, "button_back"), "menu:back")})
+		}
+		_ = tg.SendMessageWithMarkup(chatID, text, makeInlineKeyboard(rows...))
+	}
 }
 
 func sendBackMessage(tg *telegram.Client, chatID int64, lang, text string) {
@@ -458,6 +536,11 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	case data == "menu:language":
 		clearTelegramState(ctx, pool, chatID)
 		sendLanguageMenu(tg, chatID)
+	case data == "menu:plans":
+		clearTelegramState(ctx, pool, chatID)
+		sendPlansMenu(tg, chatID, lang)
+	case strings.HasPrefix(data, "plan:"):
+		SendTelegramMessage(tg, chatID, tr(lang, "plan_free_active"))
 	case data == "menu:new":
 		clearTelegramState(ctx, pool, chatID)
 		_, err := pool.Exec(ctx, `INSERT INTO telegram_states (telegram_id, user_id, step) VALUES ($1, $2, 'awaiting_mode')`, chatID, userID)

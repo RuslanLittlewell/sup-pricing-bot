@@ -27,6 +27,16 @@ type SetWebhookRequest struct {
 	URL string `json:"url"`
 }
 
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+type SetMyCommandsRequest struct {
+	Commands     []BotCommand `json:"commands"`
+	LanguageCode string       `json:"language_code,omitempty"`
+}
+
 type Update struct {
 	UpdateID      int            `json:"update_id"`
 	Message       *Message       `json:"message,omitempty"`
@@ -226,6 +236,31 @@ func (c *Client) SetWebhook(url string) error {
 
 	if !apiResp.Ok {
 		return fmt.Errorf("set webhook failed: %s", apiResp.Description)
+	}
+
+	return nil
+}
+
+func (c *Client) SetMyCommands(commands []BotCommand, languageCode string) error {
+	body := SetMyCommandsRequest{Commands: commands, LanguageCode: languageCode}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal commands: %w", err)
+	}
+
+	resp, err := c.client.Post(c.BaseURL()+"/setMyCommands", "application/json", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("set my commands: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var apiResp APIResponse
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		return fmt.Errorf("parse response: %w", err)
+	}
+	if !apiResp.Ok {
+		return fmt.Errorf("set my commands failed: %s", apiResp.Description)
 	}
 
 	return nil

@@ -61,6 +61,11 @@ var Migrations = []Migration{
 		Description: "add tracking mode (price or stock) to trackers",
 		SQL:         migrationV9,
 	},
+	{
+		Version:     10,
+		Description: "add basic plan, align plan limits, add Tribute subscription tracking",
+		SQL:         migrationV10,
+	},
 }
 
 const migrationV1 = `
@@ -321,6 +326,42 @@ ALTER TABLE telegram_states ADD COLUMN IF NOT EXISTS title TEXT;
 
 const migrationV9 = `
 ALTER TABLE trackers ADD COLUMN IF NOT EXISTS tracking_mode TEXT NOT NULL DEFAULT 'price';
+`
+
+const migrationV10 = `
+-- Align plan limits with what's advertised on the site/bot, add the Basic tier.
+INSERT INTO plans (code, name, max_trackers, check_interval_minutes, price_history_days, is_paid)
+VALUES
+    ('free', 'Free', 3, 180, 30, false),
+    ('basic', 'Basic', 10, 60, 90, true),
+    ('pro', 'Pro', 50, 30, 365, true)
+ON CONFLICT (code) DO UPDATE SET
+    name = EXCLUDED.name,
+    max_trackers = EXCLUDED.max_trackers,
+    check_interval_minutes = EXCLUDED.check_interval_minutes,
+    price_history_days = EXCLUDED.price_history_days,
+    is_paid = EXCLUDED.is_paid;
+
+-- Track the Tribute subscription backing a paid plan, and when it lapses.
+ALTER TABLE user_plans ADD COLUMN IF NOT EXISTS tribute_subscription_id BIGINT;
+ALTER TABLE user_plans ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE user_plans ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+
+-- Raw log of every Tribute webhook delivery. The unique constraint on
+-- (event_name, subscription_id, event_created_at) makes processing idempotent:
+-- Tribute retries deliveries on failure for up to ~24h, and this rejects duplicates.
+CREATE TABLE IF NOT EXISTS tribute_webhook_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_name TEXT NOT NULL,
+    subscription_id BIGINT,
+    event_created_at TIMESTAMPTZ,
+    telegram_user_id BIGINT,
+    payload JSONB NOT NULL,
+    processed BOOLEAN NOT NULL DEFAULT false,
+    error_message TEXT,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (event_name, subscription_id, event_created_at)
+);
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {

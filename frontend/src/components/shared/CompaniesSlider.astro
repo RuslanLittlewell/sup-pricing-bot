@@ -5,7 +5,7 @@ const slides = [
 ]
 ---
 
-<div class="companies-slider relative z-[1] my-20 overflow-hidden py-5">
+<div class="companies-slider relative z-[1] my-0 overflow-hidden py-5 md:my-20">
   <div class="companies-slider__track flex w-max items-center">
     {[0, 1].map((groupIndex) => (
       <div class="companies-slider__group flex shrink-0 items-center" aria-hidden={groupIndex === 1 ? 'true' : undefined}>
@@ -18,7 +18,7 @@ const slides = [
             fetchpriority={groupIndex === 0 && slideIndex === 0 ? 'high' : 'auto'}
             width={slide.width}
             height="50"
-            class="h-[50px] w-auto max-w-none shrink-0 opacity-80"
+            class="h-[30px] w-auto max-w-none shrink-0 opacity-80 md:h-[50px]"
           />
         ))}
       </div>

@@ -20,6 +20,39 @@ import (
 	"github.com/littlewell/price-tracker/internal/telegram"
 )
 
+var botCommands = map[string][]telegram.BotCommand{
+	"en": {
+		{Command: "start", Description: "Start the bot / choose language"},
+		{Command: "list", Description: "Show your trackers"},
+		{Command: "add", Description: "Add a tracker by link"},
+		{Command: "delete", Description: "Delete a tracker by ID"},
+		{Command: "check", Description: "Check a tracker now"},
+		{Command: "history", Description: "Show price history"},
+		{Command: "lang", Description: "Change language"},
+		{Command: "help", Description: "How to use the bot"},
+	},
+	"ru": {
+		{Command: "start", Description: "Запустить бота / выбрать язык"},
+		{Command: "list", Description: "Список трекеров"},
+		{Command: "add", Description: "Добавить трекер по ссылке"},
+		{Command: "delete", Description: "Удалить трекер по ID"},
+		{Command: "check", Description: "Проверить трекер сейчас"},
+		{Command: "history", Description: "История изменения цены"},
+		{Command: "lang", Description: "Сменить язык"},
+		{Command: "help", Description: "Как пользоваться ботом"},
+	},
+	"pl": {
+		{Command: "start", Description: "Uruchom bota / wybierz język"},
+		{Command: "list", Description: "Lista trackerów"},
+		{Command: "add", Description: "Dodaj tracker po linku"},
+		{Command: "delete", Description: "Usuń tracker po ID"},
+		{Command: "check", Description: "Sprawdź tracker teraz"},
+		{Command: "history", Description: "Historia zmian ceny"},
+		{Command: "lang", Description: "Zmień język"},
+		{Command: "help", Description: "Jak korzystać z bota"},
+	},
+}
+
 func main() {
 	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).
 		With().Timestamp().Logger()
@@ -38,6 +71,15 @@ func main() {
 			log.Warn().Err(err).Str("url", cfg.TelegramWebhook).Msg("failed to set telegram webhook")
 		} else {
 			log.Info().Str("url", cfg.TelegramWebhook).Msg("telegram webhook configured")
+		}
+	}
+
+	if err := tg.SetMyCommands(botCommands["en"], ""); err != nil {
+		log.Warn().Err(err).Msg("failed to set default telegram bot commands")
+	}
+	for langCode, commands := range botCommands {
+		if err := tg.SetMyCommands(commands, langCode); err != nil {
+			log.Warn().Err(err).Str("lang", langCode).Msg("failed to set telegram bot commands")
 		}
 	}
 
@@ -78,30 +120,8 @@ func main() {
 		// Telegram webhook (no auth required)
 		r.Post("/telegram/webhook", handler.TelegramWebhook(pool, cfg, tg, log, rend))
 
-		// Extraction endpoints (no auth required for preview)
-		r.Post("/extract/preview", handler.ExtractPreview(pool, cfg, log, rend))
-
-		// Authenticated routes
-		r.Group(func(r chi.Router) {
-			r.Use(handler.RequireAuth(pool))
-
-			r.Get("/me", handler.Me(pool))
-			r.Post("/telegram/link-code", handler.TelegramLinkCode(pool))
-			r.Get("/telegram/link", handler.TelegramLinkStatus(pool))
-			r.Get("/notifications", handler.NotificationsList(pool))
-
-			r.Route("/trackers", func(r chi.Router) {
-				r.Get("/", handler.ListTrackers(pool))
-				r.Post("/", handler.CreateTracker(pool, cfg))
-				r.Get("/{id}", handler.GetTracker(pool))
-				r.Patch("/{id}", handler.UpdateTracker(pool))
-				r.Delete("/{id}", handler.DeleteTracker(pool))
-				r.Post("/{id}/pause", handler.PauseTracker(pool))
-				r.Post("/{id}/resume", handler.ResumeTracker(pool))
-				r.Post("/{id}/recheck", handler.RecheckTracker(pool, cfg))
-				r.Get("/{id}/history", handler.TrackerHistory(pool))
-			})
-		})
+		// Tribute webhook — authenticated via trbt-signature header, not session auth
+		r.Post("/tribute/webhook", handler.TributeWebhook(pool, cfg, log))
 	})
 
 	srv := &http.Server{

@@ -1,7 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 interface FuzzyTextProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
+  /**
+   * Plain-text alternative to `children`. Use this when rendering FuzzyText as a
+   * client-hydrated island from an .astro file — Astro serializes slotted children
+   * across the island boundary as an object rather than a plain string, which breaks
+   * the canvas text rendering (renders "[object Object]"). `text` avoids that.
+   */
+  text?: string;
   i18nKey?: string;
   fontSize?: number | string;
   fontWeight?: string | number;
@@ -25,6 +32,7 @@ declare global {
 
 const FuzzyText = ({
   children,
+  text: textProp,
   i18nKey,
   fontSize = '1em',
   fontWeight = 700,
@@ -37,7 +45,7 @@ const FuzzyText = ({
   clickEffect = true,
   className = '',
 }: FuzzyTextProps) => {
-  const fallbackText = React.Children.toArray(children).join('');
+  const fallbackText = textProp ?? React.Children.toArray(children).join('');
   const [text, setText] = useState(fallbackText);
   const [layoutVersion, setLayoutVersion] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement & { cleanupFuzzyText?: () => void }>(null);

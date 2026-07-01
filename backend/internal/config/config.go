@@ -20,6 +20,10 @@ type Config struct {
 	AppName    string
 	AppURL     string
 	CORSOrigin string
+
+	TributeAPIKey              string
+	TributeBasicSubscriptionID int64
+	TributeProSubscriptionID   int64
 }
 
 func Load() *Config {
@@ -37,6 +41,10 @@ func Load() *Config {
 		AppName:         getEnv("APP_NAME", "Price Tracker"),
 		AppURL:          getEnv("APP_URL", "http://localhost:3000"),
 		CORSOrigin:      getEnv("CORS_ORIGIN", "http://localhost:3000"),
+
+		TributeAPIKey:              getEnv("TRIBUTE_API_KEY", ""),
+		TributeBasicSubscriptionID: getEnvInt64("TRIBUTE_BASIC_SUBSCRIPTION_ID", 0),
+		TributeProSubscriptionID:   getEnvInt64("TRIBUTE_PRO_SUBSCRIPTION_ID", 0),
 	}
 	return cfg
 }
@@ -51,6 +59,15 @@ func getEnv(key, fallback string) string {
 func getEnvInt(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
+	}
+	return fallback
+}
+
+func getEnvInt64(key string, fallback int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if i, err := strconv.ParseInt(v, 10, 64); err == nil {
 			return i
 		}
 	}

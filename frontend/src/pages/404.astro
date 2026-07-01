@@ -1,0 +1,40 @@
+---
+import Layout from "../layouts/Layout.astro";
+import FuzzyText from "../components/text/FuzzyText.tsx";
+---
+
+<Layout title="404 — SurPrice Bot">
+  <section class="relative flex min-h-screen items-center overflow-hidden bg-white px-6">
+    <div class="container relative z-10 mx-auto max-w-2xl px-6 py-24 text-center">
+      <div class="flex justify-center">
+        <FuzzyText
+          client:load
+          text="404"
+          fontSize="clamp(4.5rem, 18vw, 9rem)"
+          fontWeight={800}
+          color="#049fff"
+          baseIntensity={0.15}
+        />
+      </div>
+      <h1 data-i18n="notfound.title" class="mt-4 text-2xl font-bold text-slate-900 sm:text-3xl">
+        Page not found
+      </h1>
+      <p data-i18n="notfound.subtitle" class="mt-4 text-lg text-slate-500">
+        The page you're looking for doesn't exist or was moved.
+      </p>
+      <a
+        href="/"
+        class="mt-8 inline-flex h-12 items-center justify-center rounded-xl bg-gradient-to-r from-[#6A5AF9] to-[#049fff] px-8 text-sm font-bold text-white shadow-lg transition-all duration-300 hover:scale-[1.02] hover:opacity-90"
+      >
+        <span data-i18n="notfound.cta">Back to home</span>
+      </a>
+    </div>
+
+    <div class="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+      <div class="absolute top-20 -left-20 w-72 h-72 md:w-1/3 md:h-1/3 bg-[#6A5AF9]/30 blob-animate blur-3xl">
+      </div>
+      <div class="absolute bottom-20 right-10 w-72 h-72 md:w-1/3 md:h-1/3 bg-[#049fff]/30 blob-animate blur-3xl">
+      </div>
+    </div>
+  </section>
+</Layout>

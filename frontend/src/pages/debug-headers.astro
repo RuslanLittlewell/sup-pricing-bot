@@ -1,7 +1,0 @@
----
-const cookie = Astro.request.headers.get("cookie");
-const ua = Astro.request.headers.get("user-agent");
----
-<h1>Debug Headers</h1>
-<p>Cookie: {cookie ? "present (" + cookie.substring(0, 30) + "...)" : "MISSING"}</p>
-<p>UA: {ua}</p>
