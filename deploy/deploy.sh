@@ -59,6 +59,16 @@ echo "API/admin: https://${API_DOMAIN}"
 
 run_remote "mkdir -p '${DEPLOY_DIR}'"
 
+# Clean previously-uploaded source before extracting the new tar. `tar -x` overwrites
+# files but never deletes ones that no longer exist in the archive, so without this
+# step files removed between deploys (e.g. deleted pages/modules) linger on the server
+# and break the Docker build (astro/go still compile the stale sources). Preserve only
+# server-generated state that lives in DEPLOY_DIR: .env.production and deploy/secrets.
+echo "Cleaning stale source on server..."
+run_remote "cd '${DEPLOY_DIR}' && \
+  find . -mindepth 1 -maxdepth 1 ! -name '.env.production' ! -name 'deploy' -exec rm -rf {} + && \
+  if [ -d deploy ]; then find deploy -mindepth 1 -maxdepth 1 ! -name 'secrets' -exec rm -rf {} +; fi"
+
 echo "Uploading source..."
 tar \
   --exclude='.git' \
