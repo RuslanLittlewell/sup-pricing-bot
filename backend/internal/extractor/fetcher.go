@@ -3,6 +3,7 @@ package extractor
 import (
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,17 +27,18 @@ type PageFetcher struct {
 
 func NewPageFetcher(r *renderer.Renderer, cookiesFile, proxyURL string) *PageFetcher {
 	cookies, _ := scraper.LoadCookies(cookiesFile)
-	transport := &http.Transport{}
+
+	var proxy *url.URL
 	if proxyURL != "" {
-		if proxy, err := url.Parse(proxyURL); err == nil {
-			transport.Proxy = http.ProxyURL(proxy)
+		if parsed, err := url.Parse(proxyURL); err == nil {
+			proxy = parsed
 		}
 	}
 
 	return &PageFetcher{
 		httpClient: &http.Client{
 			Timeout:   requestTimeout,
-			Transport: transport,
+			Transport: newUTLSRoundTripper(proxy),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return fmt.Errorf("too many redirects")
@@ -64,7 +66,7 @@ func (f *PageFetcher) Fetch(url string) ([]byte, error) {
 		}
 	}
 
-	body, err := f.httpFetch(url)
+	body, err := f.httpFetchWithRetry(url)
 	if err != nil {
 		if f.renderer == nil || !shouldRenderFallback(err) {
 			return nil, err
@@ -88,6 +90,28 @@ func (f *PageFetcher) Fetch(url string) ([]byte, error) {
 	}
 
 	return body, nil
+}
+
+// httpFetchWithRetry retries transient-looking failures (timeouts, and status codes
+// that could be a momentary rate-limit rather than a hard block) a couple of times with
+// jittered backoff before giving up. This is cheap relative to falling back to the
+// headless renderer, and some bot-detection systems only trip on request bursts.
+func (f *PageFetcher) httpFetchWithRetry(url string) ([]byte, error) {
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		body, err := f.httpFetch(url)
+		if err == nil {
+			return body, nil
+		}
+		lastErr = err
+		if attempt == maxAttempts || !shouldRenderFallback(err) {
+			break
+		}
+		backoff := time.Duration(300*attempt)*time.Millisecond + time.Duration(rand.Intn(300))*time.Millisecond
+		time.Sleep(backoff)
+	}
+	return nil, lastErr
 }
 
 func (f *PageFetcher) httpFetch(url string) ([]byte, error) {
