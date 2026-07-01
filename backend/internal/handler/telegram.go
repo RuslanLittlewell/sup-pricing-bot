@@ -57,6 +57,7 @@ var botTexts = map[string]map[string]string{
 		"plan_pro_trackers":       "Up to 50 trackers",
 		"plan_pro_interval":       "Scan every 30+ minutes",
 		"button_activate":         "Activate",
+		"plan_current":            "✅ Your current plan",
 		"plan_free_active":        "✅ Free is your current plan — already active, nothing to do here. Need more trackers or faster scans? Pick Basic or Pro above.",
 		"button_back":             "Back",
 		"button_yes":              "Yes",
@@ -86,6 +87,8 @@ var botTexts = map[string]map[string]string{
 		"interval_invalid":        "Choose a frequency or enter minutes as a number.",
 		"interval_save_failed":    "Could not save scan frequency.",
 		"interval_saved":          "✅ Scan frequency updated: %s",
+		"tracker_limit_reached":   "⛔ You've reached your plan's limit of %d trackers.\nDelete one, or upgrade your plan to track more.",
+		"interval_below_min":      "⛔ Your current plan checks no more often than %s.\nChoose a longer interval, or upgrade for faster checks.",
 		"tracker_not_found":       "Tracker not found.",
 		"tracker_deleted":         "✅ Tracker deleted.",
 		"page_load_failed":        "Could not load the page.",
@@ -137,6 +140,7 @@ var botTexts = map[string]map[string]string{
 		"plan_pro_trackers":       "До 50 трекеров",
 		"plan_pro_interval":       "Проверка раз в 30+ минут",
 		"button_activate":         "Активировать",
+		"plan_current":            "✅ Ваш текущий тариф",
 		"plan_free_active":        "✅ Free — ваш текущий тариф, он уже активен, ничего делать не нужно. Нужно больше трекеров или более частые проверки? Выберите Basic или Pro выше.",
 		"button_back":             "Назад",
 		"button_yes":              "Да",
@@ -166,6 +170,8 @@ var botTexts = map[string]map[string]string{
 		"interval_invalid":        "Выберите интенсивность или введите количество минут числом.",
 		"interval_save_failed":    "Ошибка при сохранении интенсивности.",
 		"interval_saved":          "✅ Интенсивность обновлена: %s",
+		"tracker_limit_reached":   "⛔ Вы достигли лимита тарифа — %d трекеров.\nУдалите один или перейдите на тариф выше, чтобы отслеживать больше.",
+		"interval_below_min":      "⛔ Ваш текущий тариф проверяет не чаще чем %s.\nВыберите больший интервал или перейдите на тариф выше для более частых проверок.",
 		"tracker_not_found":       "Трекер не найден.",
 		"tracker_deleted":         "✅ Трекер удалён.",
 		"page_load_failed":        "Не удалось загрузить страницу.",
@@ -217,6 +223,7 @@ var botTexts = map[string]map[string]string{
 		"plan_pro_trackers":       "Do 50 trackerów",
 		"plan_pro_interval":       "Sprawdzanie co 30+ minut",
 		"button_activate":         "Aktywuj",
+		"plan_current":            "✅ Twój obecny plan",
 		"plan_free_active":        "✅ Free to Twój obecny plan — jest już aktywny, nic nie trzeba robić. Potrzebujesz więcej trackerów lub szybszych sprawdzeń? Wybierz Basic albo Pro powyżej.",
 		"button_back":             "Wstecz",
 		"button_yes":              "Tak",
@@ -246,6 +253,8 @@ var botTexts = map[string]map[string]string{
 		"interval_invalid":        "Wybierz częstotliwość albo wpisz liczbę minut.",
 		"interval_save_failed":    "Nie udało się zapisać częstotliwości.",
 		"interval_saved":          "✅ Częstotliwość zaktualizowana: %s",
+		"tracker_limit_reached":   "⛔ Osiągnąłeś limit swojego planu — %d trackerów.\nUsuń jeden albo przejdź na wyższy plan, aby śledzić więcej.",
+		"interval_below_min":      "⛔ Twój obecny plan sprawdza nie częściej niż %s.\nWybierz dłuższy interwał albo przejdź na wyższy plan, aby sprawdzać częściej.",
 		"tracker_not_found":       "Nie znaleziono trackera.",
 		"tracker_deleted":         "✅ Tracker usunięty.",
 		"page_load_failed":        "Nie udało się załadować strony.",
@@ -489,7 +498,9 @@ var tributeSubscriptionURL = map[string]string{
 	"pro":   "https://t.me/tribute/app?startapp=sZIL",
 }
 
-func sendPlansMenu(tg *telegram.Client, chatID int64, lang string) {
+func sendPlansMenu(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string) {
+	currentPlan := getPlanLimits(ctx, pool, userID).code
+
 	plans := []struct {
 		code, nameKey, taglineKey, trackersKey, intervalKey string
 	}{
@@ -500,15 +511,27 @@ func sendPlansMenu(tg *telegram.Client, chatID int64, lang string) {
 	for i, p := range plans {
 		text := fmt.Sprintf("💳 <b>%s</b>\n<i>%s</i>\n\n📦 %s\n⏱ %s",
 			tr(lang, p.nameKey), tr(lang, p.taglineKey), tr(lang, p.trackersKey), tr(lang, p.intervalKey))
-		activateBtn := button(tr(lang, "button_activate"), "plan:"+p.code)
-		if url, ok := tributeSubscriptionURL[p.code]; ok {
-			activateBtn = linkButton(tr(lang, "button_activate"), url)
+
+		var rows [][]inlineButton
+		if p.code == currentPlan {
+			// Mark the active plan and omit its "Activate" button — nothing to activate.
+			text += "\n\n<b>" + tr(lang, "plan_current") + "</b>"
+		} else {
+			activateBtn := button(tr(lang, "button_activate"), "plan:"+p.code)
+			if url, ok := tributeSubscriptionURL[p.code]; ok {
+				activateBtn = linkButton(tr(lang, "button_activate"), url)
+			}
+			rows = append(rows, []inlineButton{activateBtn})
 		}
-		rows := [][]inlineButton{{activateBtn}}
 		if i == len(plans)-1 {
 			rows = append(rows, []inlineButton{button(tr(lang, "button_back"), "menu:back")})
 		}
-		_ = tg.SendMessageWithMarkup(chatID, text, makeInlineKeyboard(rows...))
+
+		var markup json.RawMessage
+		if len(rows) > 0 {
+			markup = makeInlineKeyboard(rows...)
+		}
+		_ = tg.SendMessageWithMarkup(chatID, text, markup)
 	}
 }
 
@@ -538,11 +561,14 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		sendLanguageMenu(tg, chatID)
 	case data == "menu:plans":
 		clearTelegramState(ctx, pool, chatID)
-		sendPlansMenu(tg, chatID, lang)
+		sendPlansMenu(ctx, pool, tg, chatID, userID, lang)
 	case strings.HasPrefix(data, "plan:"):
 		SendTelegramMessage(tg, chatID, tr(lang, "plan_free_active"))
 	case data == "menu:new":
 		clearTelegramState(ctx, pool, chatID)
+		if !enforceTrackerLimit(ctx, pool, tg, chatID, userID, lang, log) {
+			return
+		}
 		_, err := pool.Exec(ctx, `INSERT INTO telegram_states (telegram_id, user_id, step) VALUES ($1, $2, 'awaiting_mode')`, chatID, userID)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to start new tracker flow")
@@ -617,7 +643,7 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			ON CONFLICT (telegram_id) DO UPDATE
 			SET user_id = $2, step = 'awaiting_interval', url = $3, updated_at = now()
 		`, chatID, userID, trackerID)
-		sendIntervalMenu(tg, chatID, lang, trackerID, tr(lang, "interval_prompt"))
+		sendIntervalMenu(tg, chatID, lang, trackerID, tr(lang, "interval_prompt"), getPlanLimits(ctx, pool, userID).minIntervalMinutes)
 	case strings.HasPrefix(data, "interval:"):
 		parts := strings.Split(data, ":")
 		if len(parts) != 3 {
@@ -636,28 +662,56 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	}
 }
 
-func sendIntervalMenu(tg *telegram.Client, chatID int64, lang, trackerID, text string) {
-	markup := makeInlineKeyboard(
-		[]inlineButton{button(intervalButtonLabel(lang, 1), "interval:"+trackerID+":60"), button(intervalButtonLabel(lang, 3), "interval:"+trackerID+":180")},
-		[]inlineButton{button(intervalButtonLabel(lang, 5), "interval:"+trackerID+":300"), button(intervalButtonLabel(lang, 24), "interval:"+trackerID+":1440")},
-		[]inlineButton{button(tr(lang, "button_back"), "menu:list")},
-	)
-	_ = tg.SendMessageWithMarkup(chatID, text, markup)
+// intervalOptions are the selectable scan frequencies (minutes), ascending. Only those
+// >= the user's plan minimum are shown, so e.g. Free never sees the 30m/1h buttons.
+var intervalOptions = []int{30, 60, 180, 300, 1440}
+
+func sendIntervalMenu(tg *telegram.Client, chatID int64, lang, trackerID, text string, minInterval int) {
+	var row []inlineButton
+	var rows [][]inlineButton
+	for _, m := range intervalOptions {
+		if m < minInterval {
+			continue
+		}
+		row = append(row, button(intervalOptionLabel(lang, m), fmt.Sprintf("interval:%s:%d", trackerID, m)))
+		if len(row) == 2 {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+	rows = append(rows, []inlineButton{button(tr(lang, "button_back"), "menu:list")})
+	_ = tg.SendMessageWithMarkup(chatID, text, makeInlineKeyboard(rows...))
 }
 
-func intervalButtonLabel(lang string, hours int) string {
-	if lang == "ru" {
-		return fmt.Sprintf("%dч", hours)
+func intervalOptionLabel(lang string, minutes int) string {
+	if minutes%60 == 0 {
+		hours := minutes / 60
+		if lang == "ru" {
+			return fmt.Sprintf("%dч", hours)
+		}
+		return fmt.Sprintf("%dh", hours)
 	}
-	return fmt.Sprintf("%dh", hours)
+	if lang == "ru" {
+		return fmt.Sprintf("%dмин", minutes)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
 
 func updateTrackerInterval(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, trackerID string, minutes int, log zerolog.Logger) {
-	if minutes < 15 {
-		minutes = 15
-	}
 	if minutes > 1440 {
 		minutes = 1440
+	}
+	// Enforce the plan's minimum. The interval menu only offers allowed values, but the
+	// user can also type a number in the awaiting_interval step — reject anything faster
+	// than their plan permits rather than silently accepting it.
+	minInterval := getPlanLimits(ctx, pool, userID).minIntervalMinutes
+	if minutes < minInterval {
+		markup := makeInlineKeyboard([]inlineButton{button(tr(lang, "button_plans"), "menu:plans")})
+		_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "interval_below_min"), formatInterval(lang, minInterval)), markup)
+		return
 	}
 	tag, err := pool.Exec(ctx, `
 		UPDATE trackers
@@ -858,7 +912,7 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 	case "awaiting_interval":
 		interval, ok := parseIntervalMinutes(normalized)
 		if !ok {
-			sendIntervalMenu(tg, chatID, lang, state.URL, tr(lang, "interval_invalid"))
+			sendIntervalMenu(tg, chatID, lang, state.URL, tr(lang, "interval_invalid"), getPlanLimits(ctx, pool, userID).minIntervalMinutes)
 			return true
 		}
 		updateTrackerInterval(ctx, pool, tg, chatID, userID, lang, state.URL, interval, log)
@@ -979,7 +1033,35 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		Msg("telegram price screenshot sent")
 }
 
+// enforceTrackerLimit reports whether the user may create another tracker. When they've
+// hit their plan's max_trackers it sends an explanatory message (with an upgrade shortcut)
+// and returns false. On a transient DB error it fails open (allows creation) rather than
+// blocking a legitimate user.
+func enforceTrackerLimit(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string, log zerolog.Logger) bool {
+	limits := getPlanLimits(ctx, pool, userID)
+	count, err := countActiveTrackers(ctx, pool, userID)
+	if err != nil {
+		log.Error().Err(err).Str("user_id", userID).Msg("failed to count trackers for limit check")
+		return true
+	}
+	if count >= limits.maxTrackers {
+		markup := makeInlineKeyboard(
+			[]inlineButton{button(tr(lang, "button_plans"), "menu:plans")},
+			[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
+		)
+		_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_limit_reached"), limits.maxTrackers), markup)
+		return false
+	}
+	return true
+}
+
 func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string, state telegramState, log zerolog.Logger) {
+	// Final guard: the limit is also checked when the flow starts, but /add and the menu
+	// flow are independent entry points, so re-check right before the insert.
+	if !enforceTrackerLimit(ctx, pool, tg, chatID, userID, lang, log) {
+		clearTelegramState(ctx, pool, chatID)
+		return
+	}
 	title := state.Title
 	if title == "" {
 		title = extractDomain(state.URL)
@@ -1020,6 +1102,10 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 }
 
 func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, fetcher *extractor.PageFetcher) {
+	if !enforceTrackerLimit(ctx, pool, tg, chatID, userID, lang, log) {
+		clearTelegramState(ctx, pool, chatID)
+		return
+	}
 	SendTelegramMessage(tg, chatID, tr(lang, "stock_search_started"))
 
 	body, err := fetcher.Fetch(url)
@@ -1132,6 +1218,9 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 }
 
 func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, rend *renderer.Renderer, cookiesFile, proxyURL string) {
+	if !enforceTrackerLimit(ctx, pool, tg, chatID, userID, lang, log) {
+		return
+	}
 	fetcher := extractor.NewPageFetcher(rend, cookiesFile, proxyURL)
 	body, err := fetcher.Fetch(url)
 	if err != nil {
