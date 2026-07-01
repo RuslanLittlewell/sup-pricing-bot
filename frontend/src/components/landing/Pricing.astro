@@ -1,0 +1,154 @@
+---
+import EyebrowLabel from "../shared/EyebrowLabel.astro";
+import Lightfall from "../backgrounds/Lightfall.tsx";
+
+const botLink = "https://t.me/sur_price_bot/chat";
+
+const plans = [
+  {
+    nameKey: "pricing.free.name",
+    name: "Free",
+    taglineKey: "pricing.free.tagline",
+    tagline: "For getting started",
+    trackersKey: "pricing.free.trackers",
+    trackers: "3 trackers",
+    intervalKey: "pricing.free.interval",
+    interval: "Scan every 3+ hours",
+    ctaKey: "pricing.free.cta",
+    cta: "Start Free",
+    highlight: false,
+  },
+  {
+    nameKey: "pricing.basic.name",
+    name: "Basic",
+    badgeKey: "pricing.basic.badge",
+    badge: "Most popular",
+    taglineKey: "pricing.basic.tagline",
+    tagline: "For regular shoppers",
+    trackersKey: "pricing.basic.trackers",
+    trackers: "10 trackers",
+    intervalKey: "pricing.basic.interval",
+    interval: "Scan every 1+ hour",
+    ctaKey: "pricing.basic.cta",
+    cta: "Choose Basic",
+    highlight: true,
+  },
+  {
+    nameKey: "pricing.pro.name",
+    name: "Pro",
+    taglineKey: "pricing.pro.tagline",
+    tagline: "For power users & resellers",
+    trackersKey: "pricing.pro.trackers",
+    trackers: "50 trackers",
+    intervalKey: "pricing.pro.interval",
+    interval: "Scan every 30+ minutes",
+    ctaKey: "pricing.pro.cta",
+    cta: "Choose Pro",
+    highlight: false,
+  },
+];
+---
+
+<section id="pricing" class="relative overflow-hidden py-20 px-6 lg:py-32">
+  <div class="absolute inset-0 z-0">
+    <Lightfall
+      client:visible
+      colors={["#10B981", "#ffffff", "#3B82F6"]}
+      backgroundColor="#3B82F6"
+      mouseStrength={0}
+      streakCount={3}
+      streakWidth={0.2}
+      streakLength={1.1}
+      
+    />
+  </div>
+
+  <div class="container relative z-10 mx-auto px-6 pointer-events-none">
+    <div class="mx-auto max-w-3xl text-center">
+      <h2
+        data-i18n="pricing.title"
+        class="text-3xl font-bold text-white md:text-5xl text-balance"
+      >
+        Simple plans for every shopper
+      </h2>
+      <p data-i18n="pricing.subtitle" class="mt-5 text-lg leading-8 text-white/85">
+        Start free and upgrade when you need more trackers or faster checks.
+      </p>
+    </div>
+
+    <div class="mx-auto mt-12 grid max-w-5xl items-center gap-6 lg:grid-cols-3">
+      {
+        plans.map((plan) => (
+          <div
+            class={`pointer-events-auto relative flex h-full flex-col rounded-3xl p-8 transition-transform duration-300 ${
+              plan.highlight
+                ? "border border-transparent bg-white text-slate-900 shadow-2xl lg:scale-105"
+                : "border border-white/25 bg-white/10 text-white shadow-xl backdrop-blur-md hover:bg-white/15"
+            }`}
+          >
+            {plan.highlight && (
+              <span
+                data-i18n={plan.badgeKey}
+                class="absolute -top-4 left-1/2 -translate-x-1/2 rounded-full bg-gradient-to-r from-[#10B981] to-[#3B82F6] px-4 py-1.5 text-xs font-bold uppercase tracking-wide text-white shadow-md"
+              >
+                {plan.badge}
+              </span>
+            )}
+
+            <h3 data-i18n={plan.nameKey} class="text-xl font-bold">
+              {plan.name}
+            </h3>
+            <p
+              data-i18n={plan.taglineKey}
+              class={`mt-1 text-sm ${plan.highlight ? "text-slate-500" : "text-white/75"}`}
+            >
+              {plan.tagline}
+            </p>
+
+            <div class={`mt-6 border-t pt-6 ${plan.highlight ? "border-slate-200" : "border-white/20"}`}>
+              <div data-i18n={plan.trackersKey} class="text-3xl font-bold">
+                {plan.trackers}
+              </div>
+              <p data-i18n={plan.intervalKey} class={`mt-2 text-sm ${plan.highlight ? "text-slate-500" : "text-white/75"}`}>
+                {plan.interval}
+              </p>
+            </div>
+
+            <ul class="mt-6 flex-1 space-y-3">
+              {["pricing.feature.alerts", "pricing.feature.telegram"].map((key, i) => (
+                <li class="flex items-center gap-3 text-sm">
+                  <span
+                    class={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+                      plan.highlight ? "bg-gradient-to-r from-[#049fff] to-[#16C8BD] text-white" : "bg-white/20 text-white"
+                    }`}
+                  >
+                    <svg viewBox="0 0 16 16" class="h-2.5 w-2.5 fill-current">
+                      <path d="M6.4 11.2 2.8 7.6l1.13-1.13L6.4 8.93l5.67-5.67L13.2 4.4z" />
+                    </svg>
+                  </span>
+                  <span data-i18n={key} class={plan.highlight ? "text-slate-600" : "text-white/90"}>
+                    {i === 0 ? "Price & stock alerts" : "Instant Telegram notifications"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+
+            <a
+              href={botLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-i18n={plan.ctaKey}
+              class={`mt-8 inline-flex h-12 w-full items-center justify-center rounded-xl text-sm font-bold transition-all duration-300 hover:scale-[1.02] ${
+                plan.highlight
+                  ? "bg-gradient-to-r from-[#6A5AF9] to-[#049fff] text-white hover:opacity-90"
+                  : "bg-white text-[#049fff] hover:opacity-90"
+              }`}
+            >
+              {plan.cta}
+            </a>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>

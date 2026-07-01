@@ -10,6 +10,7 @@ const {
 } = Astro.props;
 
 import Header from "@/components/layout/Header.astro";
+import Footer from "@/components/layout/Footer.astro";
 import "../styles/globals.css";
 ---
 
@@ -32,6 +33,7 @@ import "../styles/globals.css";
     <main class="min-h-screen">
       <slot />
     </main>
+    <Footer />
     <script is:inline>
       const translations = {
         en: {
@@ -40,7 +42,6 @@ import "../styles/globals.css";
             "Track product prices, discounts and availability across online stores. Get Telegram alerts when prices drop or products come back in stock.",
           "nav.features": "Features",
           "nav.pricing": "Pricing",
-          "nav.about": "About",
           "nav.faq": "FAQ",
           "nav.cta": "Start Now",
           "hero.title": "Never Miss a Product Price Drop",
@@ -139,6 +140,28 @@ import "../styles/globals.css";
           "telegram.point3": "Track several products at once",
           "telegram.point4": "Save time on manually checking stores",
           "telegram.point5": "Decide when to buy at the right moment",
+          "pricing.eyebrow": "Pricing",
+          "pricing.title": "Simple plans for every shopper",
+          "pricing.subtitle":
+            "Start free and upgrade when you need more trackers or faster checks.",
+          "pricing.free.name": "Free",
+          "pricing.free.tagline": "For getting started",
+          "pricing.free.trackers": "3 trackers",
+          "pricing.free.interval": "Scan every 3+ hours",
+          "pricing.free.cta": "Start Free",
+          "pricing.basic.name": "Basic",
+          "pricing.basic.badge": "Most popular",
+          "pricing.basic.tagline": "For regular shoppers",
+          "pricing.basic.trackers": "10 trackers",
+          "pricing.basic.interval": "Scan every 1+ hour",
+          "pricing.basic.cta": "Choose Basic",
+          "pricing.pro.name": "Pro",
+          "pricing.pro.tagline": "For power users & resellers",
+          "pricing.pro.trackers": "50 trackers",
+          "pricing.pro.interval": "Scan every 30+ minutes",
+          "pricing.pro.cta": "Choose Pro",
+          "pricing.feature.alerts": "Price & stock alerts",
+          "pricing.feature.telegram": "Instant Telegram notifications",
           "faq.eyebrow": "Help",
           "faq.title": "F.A.Q",
           "faq.q1": "How do I track a product's price?",
@@ -159,9 +182,12 @@ import "../styles/globals.css";
           "faq.q6": "Can I use the bot to monitor competitors' prices?",
           "faq.a6":
             "Yes. Sellers and small businesses can track competitors' product prices and react to market changes faster.",
-          "limitations.title": "What's worth knowing",
           "limitations.text":
             "SurPrice Bot tracks prices on product pages, but it doesn't control store pricing and can't guarantee a discount will happen. Some sites change their page structure, limit automated checks, or temporarily hide the price. In these cases the bot may ask you to refresh the tracker or re-add the link.",
+          "footer.tagline":
+            "Track prices, get Telegram alerts, and buy at the right moment.",
+          "footer.linksTitle": "Quick Links",
+          "footer.rights": "All rights reserved.",
         },
         ru: {
           "meta.title": "Бот для отслеживания цен в Telegram — SurPrice Bot",
@@ -169,7 +195,6 @@ import "../styles/globals.css";
             "Отслеживайте цены на товары, скидки и наличие в онлайн-магазинах. SurPrice Bot отправит уведомление в Telegram, когда цена изменится или товар снова появится.",
           "nav.features": "Возможности",
           "nav.pricing": "Цены",
-          "nav.about": "О сервисе",
           "nav.faq": "Вопросы",
           "nav.cta": "Начать",
           "hero.title": "Не пропускайте снижение цены товара",
@@ -268,6 +293,28 @@ import "../styles/globals.css";
           "telegram.point3": "Отслеживать несколько товаров одновременно",
           "telegram.point4": "Экономить время на ручной проверке магазинов",
           "telegram.point5": "Принимать решение о покупке в подходящий момент",
+          "pricing.eyebrow": "Тарифы",
+          "pricing.title": "Простые тарифы для любого покупателя",
+          "pricing.subtitle":
+            "Начните бесплатно и переходите на тариф выше, когда понадобится больше трекеров или более частые проверки.",
+          "pricing.free.name": "Free",
+          "pricing.free.tagline": "Чтобы начать",
+          "pricing.free.trackers": "3 трекера",
+          "pricing.free.interval": "Проверка раз в 3+ часа",
+          "pricing.free.cta": "Начать бесплатно",
+          "pricing.basic.name": "Basic",
+          "pricing.basic.badge": "Популярный выбор",
+          "pricing.basic.tagline": "Для активных покупателей",
+          "pricing.basic.trackers": "10 трекеров",
+          "pricing.basic.interval": "Проверка раз в 1+ час",
+          "pricing.basic.cta": "Выбрать Basic",
+          "pricing.pro.name": "Pro",
+          "pricing.pro.tagline": "Для профи и продавцов",
+          "pricing.pro.trackers": "50 трекеров",
+          "pricing.pro.interval": "Проверка раз в 30+ минут",
+          "pricing.pro.cta": "Выбрать Pro",
+          "pricing.feature.alerts": "Уведомления о цене и наличии",
+          "pricing.feature.telegram": "Мгновенные уведомления в Telegram",
           "faq.eyebrow": "Помощь",
           "faq.title": "Частые вопросы",
           "faq.q1": "Как отследить цену товара?",
@@ -288,9 +335,12 @@ import "../styles/globals.css";
           "faq.q6": "Можно ли использовать бота для мониторинга цен конкурентов?",
           "faq.a6":
             "Да. Продавцы и малый бизнес могут отслеживать цены на товары конкурентов и быстрее реагировать на изменения рынка.",
-          "limitations.title": "Что важно знать",
           "limitations.text":
             "SurPrice Bot отслеживает цены на страницах товаров, но не управляет ценами магазинов и не гарантирует наличие скидки. Некоторые сайты могут менять структуру страниц, ограничивать автоматическую проверку или временно скрывать цену. В таких случаях бот может попросить обновить трекер или повторно добавить ссылку.",
+          "footer.tagline":
+            "Отслеживайте цены, получайте уведомления в Telegram и покупайте в нужный момент.",
+          "footer.linksTitle": "Быстрые ссылки",
+          "footer.rights": "Все права защищены.",
         },
         pl: {
           "meta.title": "Bot do śledzenia cen w Telegramie — SurPrice Bot",
@@ -298,7 +348,6 @@ import "../styles/globals.css";
             "Śledź ceny produktów, promocje i dostępność w sklepach internetowych. Otrzymuj powiadomienia w Telegramie, gdy cena spadnie lub produkt wróci do sprzedaży.",
           "nav.features": "Funkcje",
           "nav.pricing": "Cennik",
-          "nav.about": "O projekcie",
           "nav.faq": "FAQ",
           "nav.cta": "Zacznij",
           "hero.title": "Nie przegap obniżki ceny produktu",
@@ -397,6 +446,28 @@ import "../styles/globals.css";
           "telegram.point3": "Śledzisz kilka produktów jednocześnie",
           "telegram.point4": "Oszczędzasz czas na ręcznym sprawdzaniu sklepów",
           "telegram.point5": "Decydujesz o zakupie w odpowiednim momencie",
+          "pricing.eyebrow": "Cennik",
+          "pricing.title": "Proste plany dla każdego kupującego",
+          "pricing.subtitle":
+            "Zacznij za darmo i przejdź wyżej, gdy potrzebujesz więcej trackerów lub szybszych sprawdzeń.",
+          "pricing.free.name": "Free",
+          "pricing.free.tagline": "Na początek",
+          "pricing.free.trackers": "3 trackery",
+          "pricing.free.interval": "Sprawdzanie co 3+ godziny",
+          "pricing.free.cta": "Zacznij za darmo",
+          "pricing.basic.name": "Basic",
+          "pricing.basic.badge": "Najpopularniejszy",
+          "pricing.basic.tagline": "Dla aktywnych kupujących",
+          "pricing.basic.trackers": "10 trackerów",
+          "pricing.basic.interval": "Sprawdzanie co 1+ godzinę",
+          "pricing.basic.cta": "Wybierz Basic",
+          "pricing.pro.name": "Pro",
+          "pricing.pro.tagline": "Dla profesjonalistów i sprzedawców",
+          "pricing.pro.trackers": "50 trackerów",
+          "pricing.pro.interval": "Sprawdzanie co 30+ minut",
+          "pricing.pro.cta": "Wybierz Pro",
+          "pricing.feature.alerts": "Alerty o cenie i dostępności",
+          "pricing.feature.telegram": "Natychmiastowe powiadomienia w Telegramie",
           "faq.eyebrow": "Pomoc",
           "faq.title": "Najczęstsze pytania",
           "faq.q1": "Jak śledzić cenę produktu?",
@@ -417,9 +488,12 @@ import "../styles/globals.css";
           "faq.q6": "Czy mogę używać bota do monitorowania cen konkurencji?",
           "faq.a6":
             "Tak. Sprzedawcy i małe firmy mogą śledzić ceny produktów konkurencji i szybciej reagować na zmiany rynkowe.",
-          "limitations.title": "Co warto wiedzieć",
           "limitations.text":
             "SurPrice Bot śledzi ceny na stronach produktów, ale nie zarządza cenami sklepów i nie gwarantuje pojawienia się rabatu. Niektóre strony mogą zmieniać strukturę, ograniczać automatyczne sprawdzanie lub tymczasowo ukrywać cenę. W takich przypadkach bot może poprosić o odświeżenie trackera lub ponowne dodanie linku.",
+          "footer.tagline":
+            "Śledź ceny, otrzymuj powiadomienia w Telegramie i kupuj w odpowiednim momencie.",
+          "footer.linksTitle": "Szybkie linki",
+          "footer.rights": "Wszelkie prawa zastrzeżone.",
         },
       };
 

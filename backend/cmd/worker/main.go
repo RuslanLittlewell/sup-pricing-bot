@@ -288,8 +288,8 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 	}
 
 	candidate := result.Candidates[0]
-	newPrice := 0.0
-	if _, err := fmt.Sscanf(candidate.Price, "%f", &newPrice); err != nil {
+	newPrice, ok := parsePriceFromText(candidate.Price)
+	if !ok {
 		return 0, "", "", fmt.Errorf("failed to parse price")
 	}
 
@@ -368,14 +368,37 @@ func parsePriceTokensFromText(text string) []float64 {
 	return prices
 }
 
+// parsePriceToken normalizes a raw price string that may use either the
+// "1,660.00" (US) or "1.660,00" (EU) convention for thousands/decimal
+// separators. The rightmost comma or dot is treated as the decimal point
+// only when it is followed by 1-2 digits (a plausible cents value);
+// otherwise every separator is treated as a thousands grouping.
 func parsePriceToken(match string) (float64, bool) {
 	normalized := strings.ReplaceAll(match, " ", "")
-	if strings.Count(normalized, ",") == 1 && strings.Count(normalized, ".") == 0 {
-		normalized = strings.ReplaceAll(normalized, ",", ".")
-	} else {
-		normalized = strings.ReplaceAll(normalized, ",", "")
+	normalized = strings.ReplaceAll(normalized, "\u00A0", "")
+
+	decimalIdx := strings.LastIndex(normalized, ",")
+	if dot := strings.LastIndex(normalized, "."); dot > decimalIdx {
+		decimalIdx = dot
 	}
-	price, err := strconv.ParseFloat(normalized, 64)
+
+	intPart, fracPart := normalized, ""
+	if decimalIdx != -1 {
+		if n := len(normalized) - decimalIdx - 1; n >= 1 && n <= 2 {
+			intPart, fracPart = normalized[:decimalIdx], normalized[decimalIdx+1:]
+		}
+	}
+
+	intPart = strings.NewReplacer(",", "", ".", "").Replace(intPart)
+	if intPart == "" {
+		return 0, false
+	}
+	cleaned := intPart
+	if fracPart != "" {
+		cleaned += "." + fracPart
+	}
+
+	price, err := strconv.ParseFloat(cleaned, 64)
 	return price, err == nil && price > 0
 }
 

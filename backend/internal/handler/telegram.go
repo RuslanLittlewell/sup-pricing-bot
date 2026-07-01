@@ -38,10 +38,11 @@ var botTexts = map[string]map[string]string{
 		"help":                    "Send a product link, then the current price. Commands:\n/list — tracker list\n/lang — change language\n/delete <id> — delete\n/check <id> — check now\n/history <id> — change history",
 		"send_link_or_help":       "Send a product link to track or /help.",
 		"choose_tracking_mode":    "What do you want to track?",
-		"button_track_price":      "💰 Price",
-		"button_track_stock":      "📦 Availability",
+		"button_track_price":      "💰 Price tracking",
+		"button_track_stock":      "📦 Stock waiting",
 		"stock_search_started":    "Checking availability on the page...",
 		"stock_tracker_created":   "✅ Tracker created!\n\n<b>%s</b>\n🔗 %s\n📦 %s\nI will notify you when this changes.\nID: <code>%s</code>",
+		"button_new_tracker":      "➕ New tracker",
 		"button_trackers":         "My trackers",
 		"button_back":             "Back",
 		"button_yes":              "Yes",
@@ -49,6 +50,7 @@ var botTexts = map[string]map[string]string{
 		"button_edit":             "Edit",
 		"button_delete":           "Delete",
 		"button_choose_language":  "Language",
+		"enter_link":              "Send the product link",
 		"enter_price":             "Enter the current price",
 		"save_link_failed":        "Could not save the link. Please try again.",
 		"price_invalid":           "Enter a numeric price, for example: 1299, 1299.99 or 1299 zł",
@@ -102,17 +104,19 @@ var botTexts = map[string]map[string]string{
 		"help":                    "Отправьте ссылку товара, затем текущую цену. Команды:\n/list — список трекеров\n/lang — сменить язык\n/delete <id> — удалить\n/check <id> — проверить сейчас\n/history <id> — история изменений",
 		"send_link_or_help":       "Отправьте ссылку товара для трекинга или /help.",
 		"choose_tracking_mode":    "Что вы хотите отслеживать?",
-		"button_track_price":      "💰 Цену",
-		"button_track_stock":      "📦 Наличие",
+		"button_track_price":      "💰 Отслеживание цены",
+		"button_track_stock":      "📦 Ожидание в наличии",
 		"stock_search_started":    "Проверяю наличие товара на странице...",
 		"stock_tracker_created":   "✅ Трекер создан!\n\n<b>%s</b>\n🔗 %s\n📦 %s\nСообщу, когда это изменится.\nID: <code>%s</code>",
-		"button_trackers":         "Посмотреть мои трекеры",
+		"button_new_tracker":      "➕ Новый трекер",
+		"button_trackers":         "Мои трекеры",
 		"button_back":             "Назад",
 		"button_yes":              "Да",
 		"button_no":               "Нет",
 		"button_edit":             "Редактировать",
 		"button_delete":           "Удалить",
 		"button_choose_language":  "Язык",
+		"enter_link":              "Отправьте ссылку на товар",
 		"enter_price":             "Введите текущую цену",
 		"save_link_failed":        "Не удалось сохранить ссылку. Попробуйте ещё раз.",
 		"price_invalid":           "Введите цену числом, например: 1299, 1299.99 или 1299 zł",
@@ -166,10 +170,11 @@ var botTexts = map[string]map[string]string{
 		"help":                    "Wyślij link do produktu, potem aktualną cenę. Komendy:\n/list — lista trackerów\n/lang — zmień język\n/delete <id> — usuń\n/check <id> — sprawdź teraz\n/history <id> — historia zmian",
 		"send_link_or_help":       "Wyślij link do produktu albo /help.",
 		"choose_tracking_mode":    "Co chcesz śledzić?",
-		"button_track_price":      "💰 Cenę",
-		"button_track_stock":      "📦 Dostępność",
+		"button_track_price":      "💰 Śledzenie ceny",
+		"button_track_stock":      "📦 Oczekiwanie na dostępność",
 		"stock_search_started":    "Sprawdzam dostępność produktu na stronie...",
 		"stock_tracker_created":   "✅ Tracker utworzony!\n\n<b>%s</b>\n🔗 %s\n📦 %s\nPowiadomię, gdy to się zmieni.\nID: <code>%s</code>",
+		"button_new_tracker":      "➕ Nowy tracker",
 		"button_trackers":         "Moje trackery",
 		"button_back":             "Wstecz",
 		"button_yes":              "Tak",
@@ -177,6 +182,7 @@ var botTexts = map[string]map[string]string{
 		"button_edit":             "Edytuj",
 		"button_delete":           "Usuń",
 		"button_choose_language":  "Język",
+		"enter_link":              "Wyślij link do produktu",
 		"enter_price":             "Wpisz aktualną cenę",
 		"save_link_failed":        "Nie udało się zapisać linku. Spróbuj ponownie.",
 		"price_invalid":           "Wpisz cenę jako liczbę, np. 1299, 1299.99 albo 1299 zł",
@@ -324,7 +330,7 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 			handleCheckTracker(ctx, pool, tg, from.ID, userID, lang, text[7:], log, rend, cfg.ScraperCookies, cfg.ScraperProxy)
 		case strings.HasPrefix(text, "/history "):
 			handleTrackerHistory(ctx, pool, tg, from.ID, userID, lang, text[9:], log)
-		case handleTrackerDialog(ctx, pool, tg, from.ID, userID, lang, text, log, rend):
+		case handleTrackerDialog(ctx, pool, tg, from.ID, userID, lang, text, log, rend, cfg):
 			return
 		default:
 			SendTelegramMessage(tg, from.ID, tr(lang, "send_link_or_help"))
@@ -421,6 +427,7 @@ func sendLanguageMenu(tg *telegram.Client, chatID int64) {
 
 func sendMainMenu(tg *telegram.Client, chatID int64, lang, text string) {
 	markup := makeInlineKeyboard(
+		[]inlineButton{button(tr(lang, "button_new_tracker"), "menu:new")},
 		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
 		[]inlineButton{button(tr(lang, "button_choose_language"), "menu:language")},
 	)
@@ -451,10 +458,29 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	case data == "menu:language":
 		clearTelegramState(ctx, pool, chatID)
 		sendLanguageMenu(tg, chatID)
+	case data == "menu:new":
+		clearTelegramState(ctx, pool, chatID)
+		_, err := pool.Exec(ctx, `INSERT INTO telegram_states (telegram_id, user_id, step) VALUES ($1, $2, 'awaiting_mode')`, chatID, userID)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to start new tracker flow")
+			SendTelegramMessage(tg, chatID, tr(lang, "save_link_failed"))
+			return
+		}
+		sendModeMenu(tg, chatID, lang, tr(lang, "choose_tracking_mode"))
 	case data == "mode:price":
 		state, ok := getTelegramState(ctx, pool, chatID)
 		if !ok || state.Step != "awaiting_mode" {
 			sendMainMenu(tg, chatID, lang, tr(lang, "menu_stale"))
+			return
+		}
+		if state.URL == "" {
+			_, err := pool.Exec(ctx, `UPDATE telegram_states SET step = 'awaiting_url_price', updated_at = now() WHERE telegram_id = $1`, chatID)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to switch telegram state to awaiting_url_price")
+				SendTelegramMessage(tg, chatID, tr(lang, "save_link_failed"))
+				return
+			}
+			sendBackMessage(tg, chatID, lang, tr(lang, "enter_link"))
 			return
 		}
 		_, err := pool.Exec(ctx, `UPDATE telegram_states SET step = 'awaiting_price', updated_at = now() WHERE telegram_id = $1`, chatID)
@@ -468,6 +494,16 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		state, ok := getTelegramState(ctx, pool, chatID)
 		if !ok || state.Step != "awaiting_mode" {
 			sendMainMenu(tg, chatID, lang, tr(lang, "menu_stale"))
+			return
+		}
+		if state.URL == "" {
+			_, err := pool.Exec(ctx, `UPDATE telegram_states SET step = 'awaiting_url_stock', updated_at = now() WHERE telegram_id = $1`, chatID)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to switch telegram state to awaiting_url_stock")
+				SendTelegramMessage(tg, chatID, tr(lang, "save_link_failed"))
+				return
+			}
+			sendBackMessage(tg, chatID, lang, tr(lang, "enter_link"))
 			return
 		}
 		fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
@@ -617,7 +653,7 @@ type telegramState struct {
 	Rule           json.RawMessage
 }
 
-func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, text string, log zerolog.Logger, rend *renderer.Renderer) bool {
+func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, text string, log zerolog.Logger, rend *renderer.Renderer, cfg *config.Config) bool {
 	normalized := strings.TrimSpace(text)
 	lowered := strings.ToLower(normalized)
 
@@ -641,6 +677,21 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 	}
 
 	if isURL(normalized) {
+		if hasState && state.Step == "awaiting_url_price" {
+			_, err := pool.Exec(ctx, `UPDATE telegram_states SET step = 'awaiting_price', url = $2, updated_at = now() WHERE telegram_id = $1`, chatID, normalized)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to save telegram state")
+				SendTelegramMessage(tg, chatID, tr(lang, "save_link_failed"))
+				return true
+			}
+			sendBackMessage(tg, chatID, lang, tr(lang, "enter_price"))
+			return true
+		}
+		if hasState && state.Step == "awaiting_url_stock" {
+			fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
+			createStockTrackerFromURL(ctx, pool, tg, chatID, userID, lang, normalized, log, fetcher)
+			return true
+		}
 		_, err := pool.Exec(ctx, `
 			INSERT INTO telegram_states (telegram_id, user_id, step, url)
 			VALUES ($1, $2, 'awaiting_mode', $3)
@@ -948,8 +999,8 @@ func clearTelegramState(ctx context.Context, pool *pgxpool.Pool, telegramID int6
 
 type trackerListRow struct {
 	id, url, title, currency, stockStatus, status string
-	price                                          *float64
-	interval                                       int
+	price                                         *float64
+	interval                                      int
 }
 
 func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string, log zerolog.Logger) {
@@ -982,7 +1033,6 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 		if t.price != nil {
 			card += fmt.Sprintf("\n💰 %.2f %s", *t.price, t.currency)
 		}
-		card += fmt.Sprintf("\n📦 %s | %s", t.stockStatus, t.status)
 		card += fmt.Sprintf("\n⏱ %s", formatInterval(lang, t.interval))
 		card += fmt.Sprintf("\n🔗 %s", extractDomain(t.url))
 		card += fmt.Sprintf("\nID: <code>%s</code>", shortID)

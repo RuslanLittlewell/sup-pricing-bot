@@ -219,13 +219,17 @@ const Lightfall = ({
   const rendererRef = useRef<Renderer | null>(null);
   const mouseTargetRef = useRef<[number, number]>([0, 0]);
   const lastTimeRef = useRef(0);
+  const isVisibleRef = useRef(true);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const renderer = new Renderer({
-      dpr: dpr ?? (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1),
+      // Cap DPR — on HiDPI screens the raymarching fragment shader is expensive per
+      // pixel, and rendering at full devicePixelRatio (2-3x) can drop frames across
+      // the whole page, not just this canvas.
+      dpr: dpr ?? Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 1.5),
       alpha: true,
       antialias: true,
     });
@@ -288,6 +292,17 @@ const Lightfall = ({
     const ro = new ResizeObserver(resize);
     ro.observe(container);
 
+    // Skip rendering while scrolled off-screen — this is a full-viewport raymarched
+    // shader, and keeping it running when it's not visible steals GPU/main-thread
+    // budget from the rest of the page (e.g. other CSS/canvas animations jank).
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        isVisibleRef.current = entry.isIntersecting;
+      },
+      { rootMargin: '200px 0px' },
+    );
+    io.observe(container);
+
     const onPointerMove = (e: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
       const scale = renderer.dpr || 1;
@@ -319,7 +334,7 @@ const Lightfall = ({
       } else {
         lastTimeRef.current = t;
       }
-      if (!paused && programRef.current && meshRef.current) {
+      if (!paused && isVisibleRef.current && programRef.current && meshRef.current) {
         try {
           renderer.render({ scene: meshRef.current });
         } catch (e) {
@@ -333,6 +348,7 @@ const Lightfall = ({
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       if (mouseInteraction) canvas.removeEventListener('pointermove', onPointerMove);
       ro.disconnect();
+      io.disconnect();
       if (canvas.parentElement === container) {
         container.removeChild(canvas);
       }
