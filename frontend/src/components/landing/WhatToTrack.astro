@@ -1,0 +1,102 @@
+---
+import EyebrowLabel from "../shared/EyebrowLabel.astro";
+import FeatureCard from "../shared/FeatureCard.astro";
+import LightRays from "../shared/LightRays.astro";
+import AnimatedList from "../shared/AnimatedList.tsx";
+
+const items = [
+  { key: "whattotrack.item1", text: "Smartphones, laptops, headphones and home electronics" },
+  { key: "whattotrack.item2", text: "Kids' products, toys, clothing and diapers" },
+  { key: "whattotrack.item3", text: "Home, kitchen and renovation goods" },
+  { key: "whattotrack.item4", text: "Travel accessories and gear" },
+  { key: "whattotrack.item5", text: "Marketplace listings" },
+  { key: "whattotrack.item6", text: "Competitor prices for online sellers" },
+];
+
+const stores = [
+  "swatch.com",
+  "Zara.com",
+  "Cartier.com",
+  "Massimodutti.com",
+  "Zalando.pl",
+  "Onliner.by",
+  "AboutYou.pl",
+  "Reserved.com",
+  "Housebrand.com",
+  "Cropp.com",
+  "Sinsay.com",
+  "Empik.com",
+  "Nike.com",
+  "Wakacje.pl",
+  "Lamoda.pl",
+  "Stradivarius.com",
+];
+---
+
+<section class="relative overflow-hidden bg-gradient-to-r from-[#6A5AF9] to-[#049fff] px-6 py-16 lg:py-24">
+  <LightRays
+    raysOrigin="left"
+    raysColor="#ffffff"
+    raysSpeed={0.8}
+    lightSpread={0.8}
+    rayLength={2.2}
+    class="z-[1] opacity-60 mix-blend-screen"
+  />
+
+  <div class="container relative z-10 mx-auto px-6">
+    <div class="grid items-start gap-12 lg:grid-cols-[1fr_320px]">
+      <div>
+        <EyebrowLabel i18nKey="whattotrack.eyebrow" text="Coverage" variant="dark" class="ml-0" />
+        <h2
+          data-i18n="whattotrack.title"
+          class="text-3xl font-bold text-white md:text-5xl text-balance"
+        >
+          What you can track
+        </h2>
+        <p
+          data-i18n="whattotrack.subtitle"
+          class="mt-5 text-lg text-white/85"
+        >
+          SurPrice Bot fits any product whose price changes often.
+        </p>
+
+        <div class="mt-8 grid gap-3 sm:grid-cols-2">
+          {
+            items.map((item) => (
+              <FeatureCard
+                variant="dark"
+                layout="row"
+                badgeClass="bg-white text-[#049fff] text-lg"
+                titleKey={item.key}
+                title={item.text}
+              >
+                <Fragment slot="icon">
+                  <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 fill-current">
+                    <path d="M6.4 11.2 2.8 7.6l1.13-1.13L6.4 8.93l5.67-5.67L13.2 4.4z" />
+                  </svg>
+                </Fragment>
+              </FeatureCard>
+            ))
+          }
+        </div>
+      </div>
+
+      <div>
+        <p
+          data-i18n="whattotrack.storesLabel"
+          class="text-center text-sm font-semibold uppercase tracking-wide text-white/70 lg:text-left"
+        >
+          Works with popular stores
+        </p>
+        <div class="mt-4 rounded-3xl border border-white/15 bg-white/10 p-4 shadow-xl">
+          <AnimatedList
+            items={stores}
+            className="h-[400px]"
+            itemClassName="rounded-xl bg-white/10 px-4 py-3 text-center text-sm font-medium text-white/90 transition-colors hover:bg-white/20"
+            client:visible
+          />
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

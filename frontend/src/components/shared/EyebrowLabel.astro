@@ -1,0 +1,56 @@
+---
+interface Props {
+  i18nKey: string;
+  text: string;
+  /** "light" — blue pill on light bg (default); "dark" — white pill on gradient/dark bg */
+  variant?: "light" | "dark";
+  /** Optional dynamic accent color (hex/rgb). Overrides variant colours when provided. */
+  color?: string;
+  /** When true, removes the section-eyebrow offset (ml-16 mr-auto) — use inside cards. */
+  inline?: boolean;
+  class?: string;
+}
+
+const {
+  i18nKey,
+  text,
+  variant = "light",
+  color,
+  inline = false,
+  class: className = "",
+} = Astro.props;
+
+const isDark = !color && variant === "dark";
+const dotBg = color ? "" : isDark ? "bg-white" : "bg-[#049fff]";
+const textCls = color ? "" : isDark ? "text-white" : "text-[#049fff]";
+const pillCls = color
+  ? ""
+  : isDark
+    ? "bg-white/20 backdrop-blur-sm"
+    : "bg-[#049fff]/10";
+
+const inlinePill = color ? `background:${color}1a;` : "";
+const inlineDot = color ? `background:${color};` : "";
+const inlineText = color ? `color:${color};` : "";
+---
+
+<div
+  class={`flex items-center gap-2 rounded-full px-4 py-2 w-fit ${inline ? "mb-4" : "mb-6 ml-16 mr-auto justify-self-start"} ${pillCls} ${className}`}
+  style={inlinePill}
+>
+  <span class="relative flex h-2 w-2">
+    <span
+      class={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${dotBg}`}
+      style={inlineDot}
+    ></span>
+    <span
+      class={`relative inline-flex rounded-full h-2 w-2 ${dotBg}`}
+      style={inlineDot}
+    ></span>
+  </span>
+  <span
+    data-i18n={i18nKey}
+    class={`text-sm font-medium ${textCls}`}
+    style={inlineText}
+  >{text}</span>
+</div>

@@ -51,6 +51,16 @@ var Migrations = []Migration{
 		Description: "add telegram language preference",
 		SQL:         migrationV7,
 	},
+	{
+		Version:     8,
+		Description: "add product title to telegram bot states",
+		SQL:         migrationV8,
+	},
+	{
+		Version:     9,
+		Description: "add tracking mode (price or stock) to trackers",
+		SQL:         migrationV9,
+	},
 }
 
 const migrationV1 = `
@@ -303,6 +313,14 @@ ALTER TABLE trackers ADD COLUMN IF NOT EXISTS check_interval_minutes INT NOT NUL
 const migrationV7 = `
 ALTER TABLE telegram_links ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT 'en';
 UPDATE telegram_links SET language = 'en' WHERE language IS NULL OR language NOT IN ('en', 'ru', 'pl');
+`
+
+const migrationV8 = `
+ALTER TABLE telegram_states ADD COLUMN IF NOT EXISTS title TEXT;
+`
+
+const migrationV9 = `
+ALTER TABLE trackers ADD COLUMN IF NOT EXISTS tracking_mode TEXT NOT NULL DEFAULT 'price';
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {

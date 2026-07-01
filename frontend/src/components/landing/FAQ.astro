@@ -1,0 +1,79 @@
+---
+import CompaniesSlider from "../shared/CompaniesSlider.astro";
+import FaqAccordion from "./FaqAccordion.tsx";
+
+const faqs = [
+  {
+    qKey: "faq.q1",
+    q: "How do I track a product's price?",
+    aKey: "faq.a1",
+    a: "Send a product link to the SurPrice Bot. It will start checking the page and let you know when the price changes.",
+  },
+  {
+    qKey: "faq.q2",
+    q: "Can I get notified only when the price drops?",
+    aKey: "faq.a2",
+    a: "Yes. You can track price changes and choose to be notified only when the item gets cheaper.",
+  },
+  {
+    qKey: "faq.q3",
+    q: "Can I track product availability?",
+    aKey: "faq.a3",
+    a: "Yes. SurPrice Bot can check whether a product is in stock, sold out, or back on sale.",
+  },
+  {
+    qKey: "faq.q4",
+    q: "Which stores are supported?",
+    aKey: "faq.a4",
+    a: "SurPrice Bot works with online stores and product pages where the price can be checked automatically. Support for some sites may depend on how the page is built.",
+  },
+  {
+    qKey: "faq.q5",
+    q: "Do I need to install an app?",
+    aKey: "faq.a5",
+    a: "No. SurPrice Bot runs entirely in Telegram, so there's no separate app to install.",
+  },
+  {
+    qKey: "faq.q6",
+    q: "Can I use the bot to monitor competitors' prices?",
+    aKey: "faq.a6",
+    a: "Yes. Sellers and small businesses can track competitors' product prices and react to market changes faster.",
+  },
+];
+
+const faqJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: faqs.map((item) => ({
+    "@type": "Question",
+    name: item.q,
+    acceptedAnswer: {
+      "@type": "Answer",
+      text: item.a,
+    },
+  })),
+};
+---
+
+<section id="faq" class="relative bg-white py-20 px-6 lg:py-32">
+  
+  <div class="container overflow-hidden px-6 pb-12">
+    <CompaniesSlider />
+  </div>
+  <div class="container mx-auto max-w-3xl px-6">
+    <h2
+      data-i18n="faq.title"
+      class="mb-10 text-center text-3xl font-bold text-slate-900 md:text-5xl"
+    >
+      F.A.Q
+    </h2>
+
+    <FaqAccordion items={faqs} client:load />
+  </div>
+
+  <script
+    type="application/ld+json"
+    is:inline
+    set:html={JSON.stringify(faqJsonLd)}
+  />
+</section>

@@ -2,16 +2,73 @@
 interface Props {
   titleKey: string;
   title: string;
-  textKey: string;
-  text: string;
+  textKey?: string;
+  text?: string;
+  /** "dark" (default) — glass card on gradient bg; "light" — white card on light bg */
+  variant?: "dark" | "light";
+  /** "stack" (default) — badge above title+text; "row" — icon left of a single line, for list items */
+  layout?: "stack" | "row";
+  /** Optional numbered badge text, rendered above/left of the title */
+  badge?: string;
+  /** Overrides the default gradient badge circle (e.g. "bg-white text-[#049fff]") */
+  badgeClass?: string;
 }
 
-const { titleKey, title, textKey, text } = Astro.props;
+const {
+  titleKey,
+  title,
+  textKey,
+  text,
+  variant = "dark",
+  layout = "stack",
+  badge,
+  badgeClass,
+} = Astro.props;
+
+const isLight = variant === "light";
+const isRow = layout === "row";
+const hasBadge = Boolean(badge) || Astro.slots.has("icon");
+
+const titleSizeClass = isRow ? "text-base font-medium" : "mb-2 text-lg font-bold";
+const titleColorClass = isRow
+  ? isLight
+    ? "text-slate-700"
+    : "text-white/90"
+  : isLight
+    ? "text-slate-900"
+    : "text-white";
 ---
 
-<div class="border-glow rounded-lg border border-white/15 bg-white/15 p-5 backdrop-blur-sm">
-  <h3 data-i18n={titleKey} class="mb-2 text-lg font-bold text-white">{title}</h3>
-  <p data-i18n={textKey} class="text-sm leading-6 text-white/85">{text}</p>
+<div
+  class={`border-glow ${
+    isLight
+      ? "rounded-2xl border border-slate-200 bg-white shadow-sm"
+      : "rounded-lg border border-white/15 bg-white/15 backdrop-blur-sm"
+  } ${isRow ? "flex items-start gap-3 p-5" : "p-6"}`}
+  data-variant={variant}
+>
+  {
+    hasBadge && (
+      <span
+        class={`flex shrink-0 items-center justify-center rounded-full font-bold ${
+          isRow ? "mt-0.5 h-6 w-6 text-xs" : "mb-4 h-10 w-10 text-sm"
+        } ${badgeClass ?? "bg-gradient-to-r from-[#049fff] to-[#16C8BD] text-white"}`}
+      >
+        {badge}
+        <slot name="icon" />
+      </span>
+    )
+  }
+  <div>
+    <h3 data-i18n={titleKey} class={`${titleSizeClass} ${titleColorClass}`}>{title}</h3>
+    {
+      text && (
+        <p data-i18n={textKey} class={`text-sm leading-6 ${isLight ? "text-slate-500" : "text-white/85"}`}>
+          {text}
+        </p>
+      )
+    }
+  </div>
 </div>
 
 <style>
@@ -27,6 +84,14 @@ const { titleKey, title, textKey, text } = Astro.props;
       transparent 65%
     );
     transition: background-color 0.25s ease;
+  }
+
+  .border-glow[data-variant="light"] {
+    background-image: radial-gradient(
+      var(--spotlight-radius) circle at var(--glow-x, -300px) var(--glow-y, -300px),
+      rgba(4, 159, 255, 0.08),
+      transparent 65%
+    );
   }
 
   /* Soft halo that spills beyond the border */

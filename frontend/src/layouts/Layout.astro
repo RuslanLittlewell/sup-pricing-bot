@@ -4,19 +4,28 @@ export interface Props {
   description?: string;
 }
 
-const { title = "Price Tracker", description = "Отслеживание изменения цен и наличия товаров с уведомлениями в Telegram" } = Astro.props;
+const {
+  title = "Telegram Price Tracker Bot — SurPrice Bot",
+  description = "Track product prices, discounts and availability across online stores. Get Telegram alerts when prices drop or products come back in stock.",
+} = Astro.props;
 
 import Header from "@/components/layout/Header.astro";
 import "../styles/globals.css";
 ---
 
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{title}</title>
-    <meta name="description" content={description} />
+    <title data-i18n="meta.title">{title}</title>
+    <meta name="description" content={description} data-i18n-content="meta.description" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap"
+    />
   </head>
   <body>
     <Header />
@@ -26,13 +35,17 @@ import "../styles/globals.css";
     <script is:inline>
       const translations = {
         en: {
+          "meta.title": "Telegram Price Tracker Bot — SurPrice Bot",
+          "meta.description":
+            "Track product prices, discounts and availability across online stores. Get Telegram alerts when prices drop or products come back in stock.",
           "nav.features": "Features",
           "nav.pricing": "Pricing",
           "nav.about": "About",
+          "nav.faq": "FAQ",
           "nav.cta": "Start Now",
           "hero.title": "Never Miss a Product Price Drop",
           "hero.subtitle":
-            "SurPrice is your Telegram bot for tracking product prices without the need to check stores manually.",
+            "SurPrice Bot is your Telegram bot for tracking product prices without the need to check stores manually.",
           "hero.cta": "Try Now",
           "home.title": "Price Tracker",
           "home.subtitle":
@@ -41,7 +54,7 @@ import "../styles/globals.css";
           "info.eyebrow": "Price tracking via Telegram",
           "info.title": "Track product prices across online stores automatically",
           "info.description":
-            "SurPrice monitors product pages, detects price and availability changes, and sends Telegram alerts when it is time to buy.",
+            "SurPrice Bot monitors product pages, detects price and availability changes, and sends Telegram alerts when it is time to buy.",
           "info.card1.title": "Price drop alerts",
           "info.card1.text":
             "Add a product URL once and receive a Telegram notification when the price changes.",
@@ -51,13 +64,14 @@ import "../styles/globals.css";
           "info.card3.title": "Flexible scan intervals",
           "info.card3.text":
             "Choose how often each tracker checks the page: every hour, daily, or anything in between.",
+          "usefulfor.eyebrow": "Use cases",
           "usefulfor.title": "Who SurPrice Bot Is For",
           "usefulfor.titleHtml": "Who Sur<span class=\"bg-gradient-to-r from-[#049fff] to-[#16C8BD] bg-clip-text text-transparent\">Price</span> <span class=\"text-[#16C8BD]\">Bot</span> Is For",
           "usefulfor.subtitle": "One bot that saves money on everyday tasks",
           "usefulfor.cta": "Start Tracking",
           "usefulfor.cat1.title": "Tech & Electronics Shoppers",
           "usefulfor.cat1.headline": "Get the best price on gadgets",
-          "usefulfor.cat1.stat": "Save up to 30% on electronics",
+          "usefulfor.cat1.stat": "Catch the right moment to buy",
           "usefulfor.cat1.quote": "Track prices on laptops, smartphones, or headphones — buy exactly when the price drops.",
           "usefulfor.cat1.example": "Laptops · smartphones · headphones",
           "usefulfor.cat2.title": "Deal Hunters",
@@ -85,15 +99,82 @@ import "../styles/globals.css";
           "usefulfor.cat6.stat": "Prices on luggage, gadgets & gear",
           "usefulfor.cat6.quote": "Prepare for your trip without overpaying for gear and accessories.",
           "usefulfor.cat6.example": "Luggage · gadgets · gear",
+          "usefulfor.seoTitle": "Who a price tracking bot is useful for",
+          "usefulfor.seoText":
+            "SurPrice Bot is for shoppers who don't want to check store websites manually every day. The bot helps you wait for the right price and get a Telegram notification the moment it drops. Tech buyers can track smartphones, laptops, monitors, headphones and other gadgets. Parents can follow prices on kids' products, toys and clothing. Marketplace sellers can monitor how competitors' prices change. Resellers can spot profitable price gaps faster.",
+          "howItWorks.eyebrow": "How it works",
+          "howItWorks.title": "How SurPrice Bot tracks prices for you",
+          "howItWorks.subtitle":
+            "SurPrice Bot checks store pages for you, so you don't have to refresh them by hand.",
+          "howItWorks.step1.title": "Send a link",
+          "howItWorks.step1.text":
+            "Paste any product page link to the SurPrice Bot.",
+          "howItWorks.step2.title": "The bot finds the product",
+          "howItWorks.step2.text":
+            "SurPrice Bot reads the page, saves the current price and starts checking it on a schedule.",
+          "howItWorks.step3.title": "Enter the price",
+          "howItWorks.step3.text":
+            "Get a screenshot confirming we're tracking the right price.",
+          "howItWorks.step4.title": "Get notified — and buy",
+          "howItWorks.step4.text":
+            "Receive a Telegram message the moment the price drops or the item is back in stock, and buy at the right time.",
+          "howItWorks.footnote":
+            "Useful for electronics, kids' products, home goods, accessories, marketplace listings and seasonal shopping.",
+          "whattotrack.eyebrow": "Coverage",
+          "whattotrack.title": "What you can track",
+          "whattotrack.subtitle": "SurPrice Bot fits any product whose price changes often.",
+          "whattotrack.item1": "Smartphones, laptops, headphones and home electronics",
+          "whattotrack.item2": "Kids' products, toys, clothing and diapers",
+          "whattotrack.item3": "Home, kitchen and renovation goods",
+          "whattotrack.item4": "Travel accessories and gear",
+          "whattotrack.item5": "Marketplace listings",
+          "whattotrack.item6": "Competitor prices for online sellers",
+          "whattotrack.storesLabel": "Works with popular stores",
+          "telegram.eyebrow": "Why Telegram",
+          "telegram.title": "Why a Telegram bot beats checking manually",
+          "telegram.subtitle":
+            "No app to install, no tabs to keep open — alerts arrive where you already read messages.",
+          "telegram.point1": "Never miss a price drop",
+          "telegram.point2": "Find out instantly when an item is back in stock",
+          "telegram.point3": "Track several products at once",
+          "telegram.point4": "Save time on manually checking stores",
+          "telegram.point5": "Decide when to buy at the right moment",
+          "faq.eyebrow": "Help",
+          "faq.title": "F.A.Q",
+          "faq.q1": "How do I track a product's price?",
+          "faq.a1":
+            "Send a product link to the SurPrice Bot. It will start checking the page and let you know when the price changes.",
+          "faq.q2": "Can I get notified only when the price drops?",
+          "faq.a2":
+            "Yes. You can track price changes and choose to be notified only when the item gets cheaper.",
+          "faq.q3": "Can I track product availability?",
+          "faq.a3":
+            "Yes. SurPrice Bot can check whether a product is in stock, sold out, or back on sale.",
+          "faq.q4": "Which stores are supported?",
+          "faq.a4":
+            "SurPrice Bot works with online stores and product pages where the price can be checked automatically. Support for some sites may depend on how the page is built.",
+          "faq.q5": "Do I need to install an app?",
+          "faq.a5":
+            "No. SurPrice Bot runs entirely in Telegram, so there's no separate app to install.",
+          "faq.q6": "Can I use the bot to monitor competitors' prices?",
+          "faq.a6":
+            "Yes. Sellers and small businesses can track competitors' product prices and react to market changes faster.",
+          "limitations.title": "What's worth knowing",
+          "limitations.text":
+            "SurPrice Bot tracks prices on product pages, but it doesn't control store pricing and can't guarantee a discount will happen. Some sites change their page structure, limit automated checks, or temporarily hide the price. In these cases the bot may ask you to refresh the tracker or re-add the link.",
         },
         ru: {
+          "meta.title": "Бот для отслеживания цен в Telegram — SurPrice Bot",
+          "meta.description":
+            "Отслеживайте цены на товары, скидки и наличие в онлайн-магазинах. SurPrice Bot отправит уведомление в Telegram, когда цена изменится или товар снова появится.",
           "nav.features": "Возможности",
           "nav.pricing": "Цены",
           "nav.about": "О сервисе",
+          "nav.faq": "Вопросы",
           "nav.cta": "Начать",
           "hero.title": "Не пропускайте снижение цены товара",
           "hero.subtitle":
-            "SurPrice отслеживает цены товаров на сайтах и отправляет уведомления в Telegram, когда цена меняется.",
+            "SurPrice Bot отслеживает цены товаров на сайтах и отправляет уведомления в Telegram, когда цена меняется.",
           "hero.cta": "Попробовать",
           "home.title": "Трекер цен",
           "home.subtitle":
@@ -102,7 +183,7 @@ import "../styles/globals.css";
           "info.eyebrow": "Отслеживание цен в Telegram",
           "info.title": "Автоматически мониторьте цены товаров в интернет-магазинах",
           "info.description":
-            "SurPrice проверяет страницы товаров, находит изменения цены и наличия и отправляет уведомления в Telegram, когда пора покупать.",
+            "SurPrice Bot проверяет страницы товаров, находит изменения цены и наличия и отправляет уведомления в Telegram, когда пора покупать.",
           "info.card1.title": "Уведомления о снижении цены",
           "info.card1.text":
             "Добавьте ссылку на товар один раз и получите сообщение в Telegram, когда цена изменится.",
@@ -112,13 +193,14 @@ import "../styles/globals.css";
           "info.card3.title": "Гибкая частота проверок",
           "info.card3.text":
             "Настраивайте, как часто проверять каждый товар: каждый час, раз в день или с другим интервалом.",
+          "usefulfor.eyebrow": "Для кого",
           "usefulfor.title": "Кому пригодится SurPrice Bot",
           "usefulfor.titleHtml": "Кому пригодится Sur<span class=\"bg-gradient-to-r from-[#049fff] to-[#16C8BD] bg-clip-text text-transparent\">Price</span> <span class=\"text-[#16C8BD]\">Bot</span>",
           "usefulfor.subtitle": "Один бот, который экономит деньги в самых разных задачах",
           "usefulfor.cta": "Начать отслеживать",
           "usefulfor.cat1.title": "Покупателям техники и электроники",
           "usefulfor.cat1.headline": "Ловите лучшую цену на гаджеты",
-          "usefulfor.cat1.stat": "Экономия до 30% на технике",
+          "usefulfor.cat1.stat": "Отслеживайте падение цен и покупайте в удачный момент",
           "usefulfor.cat1.quote": "Следите за ценой на ноутбук, смартфон или наушники — и покупайте ровно тогда, когда она падает.",
           "usefulfor.cat1.example": "Ноутбуки · смартфоны · наушники",
           "usefulfor.cat2.title": "Охотникам за скидками",
@@ -146,15 +228,82 @@ import "../styles/globals.css";
           "usefulfor.cat6.stat": "Цены на чемоданы, гаджеты и снаряжение",
           "usefulfor.cat6.quote": "Подготовьтесь к путешествию, не переплачивая за экипировку и аксессуары.",
           "usefulfor.cat6.example": "Чемоданы · гаджеты · снаряжение",
+          "usefulfor.seoTitle": "Для кого полезен бот отслеживания цен",
+          "usefulfor.seoText":
+            "SurPrice Bot полезен покупателям, которые не хотят каждый день вручную проверять сайты магазинов. Бот помогает дождаться снижения цены на нужный товар и получить уведомление прямо в Telegram. Покупатели техники могут отслеживать смартфоны, ноутбуки, мониторы, наушники и другие гаджеты. Родители — следить за ценами на детские товары, игрушки и одежду. Продавцы на маркетплейсах — мониторить, как меняются предложения конкурентов. Реселлеры — быстрее находить товары с выгодной разницей в цене.",
+          "howItWorks.eyebrow": "Как это работает",
+          "howItWorks.title": "Как работает отслеживание цен в SurPrice Bot",
+          "howItWorks.subtitle":
+            "SurPrice Bot проверяет страницы магазинов вместо вас — не нужно открывать сайты вручную.",
+          "howItWorks.step1.title": "Отправьте ссылку",
+          "howItWorks.step1.text": "Пришлите ссылку на товар Telegram-боту SurPrice Bot.",
+          "howItWorks.step2.title": "Бот определит товар",
+          "howItWorks.step2.text":
+            "Бот сохранит страницу, зафиксирует текущую цену и начнёт проверять её по расписанию.",
+          "howItWorks.step3.title": "Введите цену",
+          "howItWorks.step3.text":
+            "Получите скриншот, подтверждающий, что мы отслеживаем нужную цену.",
+          "howItWorks.step4.title": "Получите уведомление и купите дешевле",
+          "howItWorks.step4.text":
+            "Сообщение в Telegram придёт, как только цена упадёт или товар появится в наличии.",
+          "howItWorks.footnote":
+            "Подходит для техники, детских товаров, товаров для дома, аксессуаров, маркетплейсов и сезонных покупок.",
+          "whattotrack.eyebrow": "Что отслеживать",
+          "whattotrack.title": "Что можно отслеживать",
+          "whattotrack.subtitle":
+            "SurPrice Bot подходит для товаров, цена которых часто меняется.",
+          "whattotrack.item1": "Смартфоны, ноутбуки, наушники и бытовая техника",
+          "whattotrack.item2": "Детские товары, игрушки, одежда и подгузники",
+          "whattotrack.item3": "Товары для дома, кухни и ремонта",
+          "whattotrack.item4": "Аксессуары для путешествий",
+          "whattotrack.item5": "Товары на маркетплейсах",
+          "whattotrack.item6": "Цены конкурентов для онлайн-продавцов",
+          "whattotrack.storesLabel": "Работает с популярными магазинами",
+          "telegram.eyebrow": "Почему Telegram",
+          "telegram.title": "Почему Telegram-бот удобнее ручной проверки",
+          "telegram.subtitle":
+            "Не нужно ставить отдельное приложение или открывать сайты магазинов каждый день — уведомления приходят туда, где вы уже читаете сообщения.",
+          "telegram.point1": "Не пропустить снижение цены",
+          "telegram.point2": "Быстро узнать, что товар снова в наличии",
+          "telegram.point3": "Отслеживать несколько товаров одновременно",
+          "telegram.point4": "Экономить время на ручной проверке магазинов",
+          "telegram.point5": "Принимать решение о покупке в подходящий момент",
+          "faq.eyebrow": "Помощь",
+          "faq.title": "Частые вопросы",
+          "faq.q1": "Как отследить цену товара?",
+          "faq.a1":
+            "Отправьте ссылку на товар Telegram-боту SurPrice Bot. Бот начнёт проверять страницу и сообщит, когда цена изменится.",
+          "faq.q2": "Можно ли получать уведомление только при снижении цены?",
+          "faq.a2":
+            "Да. Вы можете отслеживать изменение цены и получать уведомления только тогда, когда товар становится дешевле.",
+          "faq.q3": "Можно ли отслеживать наличие товара?",
+          "faq.a3":
+            "Да. SurPrice Bot может проверять, доступен ли товар, закончился ли он или снова появился в продаже.",
+          "faq.q4": "Какие магазины поддерживаются?",
+          "faq.a4":
+            "SurPrice Bot работает с интернет-магазинами и страницами товаров, где цена доступна для автоматической проверки. Для некоторых сайтов поддержка может зависеть от структуры страницы.",
+          "faq.q5": "Нужно ли устанавливать приложение?",
+          "faq.a5":
+            "Нет. SurPrice Bot работает через Telegram, поэтому отдельное приложение устанавливать не нужно.",
+          "faq.q6": "Можно ли использовать бота для мониторинга цен конкурентов?",
+          "faq.a6":
+            "Да. Продавцы и малый бизнес могут отслеживать цены на товары конкурентов и быстрее реагировать на изменения рынка.",
+          "limitations.title": "Что важно знать",
+          "limitations.text":
+            "SurPrice Bot отслеживает цены на страницах товаров, но не управляет ценами магазинов и не гарантирует наличие скидки. Некоторые сайты могут менять структуру страниц, ограничивать автоматическую проверку или временно скрывать цену. В таких случаях бот может попросить обновить трекер или повторно добавить ссылку.",
         },
         pl: {
+          "meta.title": "Bot do śledzenia cen w Telegramie — SurPrice Bot",
+          "meta.description":
+            "Śledź ceny produktów, promocje i dostępność w sklepach internetowych. Otrzymuj powiadomienia w Telegramie, gdy cena spadnie lub produkt wróci do sprzedaży.",
           "nav.features": "Funkcje",
           "nav.pricing": "Cennik",
           "nav.about": "O projekcie",
+          "nav.faq": "FAQ",
           "nav.cta": "Zacznij",
           "hero.title": "Nie przegap obniżki ceny produktu",
           "hero.subtitle":
-            "SurPrice monitoruje ceny produktów na stronach sklepów i wysyła powiadomienia w Telegramie, gdy cena się zmieni.",
+            "SurPrice Bot monitoruje ceny produktów na stronach sklepów i wysyła powiadomienia w Telegramie, gdy cena się zmieni.",
           "hero.cta": "Wypróbuj",
           "home.title": "Monitoring cen",
           "home.subtitle":
@@ -163,7 +312,7 @@ import "../styles/globals.css";
           "info.eyebrow": "Monitoring cen w Telegramie",
           "info.title": "Automatycznie śledź ceny produktów w sklepach internetowych",
           "info.description":
-            "SurPrice monitoruje strony produktów, wykrywa zmiany ceny i dostępności oraz wysyła powiadomienia w Telegramie, gdy warto kupić.",
+            "SurPrice Bot monitoruje strony produktów, wykrywa zmiany ceny i dostępności oraz wysyła powiadomienia w Telegramie, gdy warto kupić.",
           "info.card1.title": "Alerty o spadku ceny",
           "info.card1.text":
             "Dodaj link do produktu raz i otrzymaj powiadomienie w Telegramie, gdy cena się zmieni.",
@@ -173,13 +322,14 @@ import "../styles/globals.css";
           "info.card3.title": "Elastyczne interwały skanowania",
           "info.card3.text":
             "Ustaw, jak często sprawdzać każdy produkt: co godzinę, raz dziennie albo w innym rytmie.",
+          "usefulfor.eyebrow": "Dla kogo",
           "usefulfor.title": "Dla kogo jest SurPrice Bot",
           "usefulfor.titleHtml": "Dla kogo jest Sur<span class=\"bg-gradient-to-r from-[#049fff] to-[#16C8BD] bg-clip-text text-transparent\">Price</span> <span class=\"text-[#16C8BD]\">Bot</span>",
           "usefulfor.subtitle": "Jeden bot, który oszczędza pieniądze w codziennych zadaniach",
           "usefulfor.cta": "Rozpocznij śledzenie",
           "usefulfor.cat1.title": "Kupującym technikę i elektronikę",
           "usefulfor.cat1.headline": "Złap najlepszą cenę na gadżety",
-          "usefulfor.cat1.stat": "Oszczędność do 30% na elektronice",
+          "usefulfor.cat1.stat": "Śledź spadki cen i kupuj w dobrym momencie",
           "usefulfor.cat1.quote": "Śledź ceny laptopów, smartfonów i słuchawek — kupuj dokładnie wtedy, gdy cena spada.",
           "usefulfor.cat1.example": "Laptopy · smartfony · słuchawki",
           "usefulfor.cat2.title": "Łowcom okazji",
@@ -207,6 +357,69 @@ import "../styles/globals.css";
           "usefulfor.cat6.stat": "Ceny walizek, gadżetów i sprzętu",
           "usefulfor.cat6.quote": "Przygotuj się do podróży bez przepłacania za sprzęt i akcesoria.",
           "usefulfor.cat6.example": "Walizki · gadżety · sprzęt",
+          "usefulfor.seoTitle": "Dla kogo przydatny jest bot do śledzenia cen",
+          "usefulfor.seoText":
+            "SurPrice Bot jest dla osób, które nie chcą codziennie ręcznie sprawdzać stron sklepów. Bot pomaga doczekać się niższej ceny wybranego produktu i wysyła powiadomienie w Telegramie, gdy to się stanie. Kupujący elektronikę mogą śledzić smartfony, laptopy, monitory, słuchawki i inne gadżety. Rodzice mogą obserwować ceny produktów dziecięcych, zabawek i ubrań. Sprzedawcy na marketplace'ach mogą monitorować, jak zmieniają się oferty konkurencji. Reselerzy szybciej znajdą produkty z opłacalną różnicą cenową.",
+          "howItWorks.eyebrow": "Jak to działa",
+          "howItWorks.title": "Jak działa śledzenie cen w SurPrice Bot",
+          "howItWorks.subtitle":
+            "SurPrice Bot sprawdza strony sklepów za Ciebie — nie musisz robić tego ręcznie.",
+          "howItWorks.step1.title": "Wyślij link",
+          "howItWorks.step1.text": "Wklej link do produktu w Telegram-bocie SurPrice Bot.",
+          "howItWorks.step2.title": "Bot rozpoznaje produkt",
+          "howItWorks.step2.text":
+            "Bot zapisuje stronę, zapamiętuje aktualną cenę i zaczyna ją regularnie sprawdzać.",
+          "howItWorks.step3.title": "Podaj cenę",
+          "howItWorks.step3.text":
+            "Otrzymaj zrzut ekranu potwierdzający, że śledzimy właściwą cenę.",
+          "howItWorks.step4.title": "Otrzymaj powiadomienie i kup taniej",
+          "howItWorks.step4.text":
+            "Wiadomość w Telegramie przyjdzie, gdy tylko cena spadnie lub produkt wróci do sprzedaży.",
+          "howItWorks.footnote":
+            "Przydatne dla elektroniki, produktów dziecięcych, artykułów domowych, akcesoriów, ofert na marketplace'ach i zakupów sezonowych.",
+          "whattotrack.eyebrow": "Zakres",
+          "whattotrack.title": "Co możesz śledzić",
+          "whattotrack.subtitle":
+            "SurPrice Bot sprawdza się przy produktach, których cena często się zmienia.",
+          "whattotrack.item1": "Smartfony, laptopy, słuchawki i sprzęt AGD/RTV",
+          "whattotrack.item2": "Produkty dziecięce, zabawki, ubrania i pieluchy",
+          "whattotrack.item3": "Artykuły domowe, kuchenne i remontowe",
+          "whattotrack.item4": "Akcesoria podróżne",
+          "whattotrack.item5": "Oferty na marketplace'ach",
+          "whattotrack.item6": "Ceny konkurencji dla sprzedawców online",
+          "whattotrack.storesLabel": "Współpracuje z popularnymi sklepami",
+          "telegram.eyebrow": "Dlaczego Telegram",
+          "telegram.title": "Dlaczego bot w Telegramie jest wygodniejszy niż ręczne sprawdzanie",
+          "telegram.subtitle":
+            "Nie musisz instalować dodatkowej aplikacji ani codziennie otwierać stron sklepów — powiadomienia trafiają tam, gdzie już czytasz wiadomości.",
+          "telegram.point1": "Nie przegapisz obniżki ceny",
+          "telegram.point2": "Szybko dowiesz się, że produkt znów jest dostępny",
+          "telegram.point3": "Śledzisz kilka produktów jednocześnie",
+          "telegram.point4": "Oszczędzasz czas na ręcznym sprawdzaniu sklepów",
+          "telegram.point5": "Decydujesz o zakupie w odpowiednim momencie",
+          "faq.eyebrow": "Pomoc",
+          "faq.title": "Najczęstsze pytania",
+          "faq.q1": "Jak śledzić cenę produktu?",
+          "faq.a1":
+            "Wyślij link do produktu Telegram-botowi SurPrice Bot. Bot zacznie sprawdzać stronę i poinformuje Cię, gdy cena się zmieni.",
+          "faq.q2": "Czy mogę otrzymywać powiadomienia tylko przy spadku ceny?",
+          "faq.a2":
+            "Tak. Możesz śledzić zmiany ceny i otrzymywać powiadomienia tylko wtedy, gdy produkt staje się tańszy.",
+          "faq.q3": "Czy mogę śledzić dostępność produktu?",
+          "faq.a3":
+            "Tak. SurPrice Bot sprawdza, czy produkt jest dostępny, wyprzedany, czy ponownie wrócił do sprzedaży.",
+          "faq.q4": "Jakie sklepy są obsługiwane?",
+          "faq.a4":
+            "SurPrice Bot działa ze sklepami internetowymi i stronami produktów, gdzie cena może być sprawdzana automatycznie. Obsługa niektórych witryn może zależeć od struktury strony.",
+          "faq.q5": "Czy muszę instalować aplikację?",
+          "faq.a5":
+            "Nie. SurPrice Bot działa w całości w Telegramie, więc nie musisz instalować osobnej aplikacji.",
+          "faq.q6": "Czy mogę używać bota do monitorowania cen konkurencji?",
+          "faq.a6":
+            "Tak. Sprzedawcy i małe firmy mogą śledzić ceny produktów konkurencji i szybciej reagować na zmiany rynkowe.",
+          "limitations.title": "Co warto wiedzieć",
+          "limitations.text":
+            "SurPrice Bot śledzi ceny na stronach produktów, ale nie zarządza cenami sklepów i nie gwarantuje pojawienia się rabatu. Niektóre strony mogą zmieniać strukturę, ograniczać automatyczne sprawdzanie lub tymczasowo ukrywać cenę. W takich przypadkach bot może poprosić o odświeżenie trackera lub ponowne dodanie linku.",
         },
       };
 
@@ -237,6 +450,13 @@ import "../styles/globals.css";
           const key = node.getAttribute("data-i18n-html");
           if (dictionary[key]) {
             node.innerHTML = dictionary[key];
+          }
+        });
+
+        document.querySelectorAll("[data-i18n-content]").forEach((node) => {
+          const key = node.getAttribute("data-i18n-content");
+          if (dictionary[key]) {
+            node.setAttribute("content", dictionary[key]);
           }
         });
 

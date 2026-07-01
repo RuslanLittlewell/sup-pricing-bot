@@ -55,6 +55,7 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: 'Montserrat', sans-serif;
   }
 }
 
@@ -80,5 +81,14 @@
 
   .blob-animate {
     animation: 8s ease-in-out infinite blob-morph;
+  }
+
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 }

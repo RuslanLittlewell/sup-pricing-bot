@@ -1,0 +1,100 @@
+---
+import ShapeGrid from "../backgrounds/ShapeGrid";
+import EyebrowLabel from "../shared/EyebrowLabel.astro";
+import FeatureCard from "../shared/FeatureCard.astro";
+import FlowCarousel from "./FlowCarousel.tsx";
+
+const slides = [
+  "/flow/s1-portrait.png",
+  "/flow/s2-portrait.png",
+  "/flow/s3-portrait.png",
+  "/flow/s4-portrait.png",
+  "/flow/s5-portrait.png",
+];
+
+const steps = [
+  {
+    n: "01",
+    titleKey: "howItWorks.step1.title",
+    title: "Send a link",
+    textKey: "howItWorks.step1.text",
+    text: "Paste any product page link to the SurPrice Bot.",
+  },
+  {
+    n: "02",
+    titleKey: "howItWorks.step2.title",
+    title: "The bot finds the product",
+    textKey: "howItWorks.step2.text",
+    text: "SurPrice Bot reads the page, saves the current price and starts checking it on a schedule.",
+  },
+  {
+    n: "03",
+    titleKey: "howItWorks.step3.title",
+    title: "Enter the price",
+    textKey: "howItWorks.step3.text",
+    text: "Get a screenshot confirming we're tracking the right price.",
+  },
+  {
+    n: "04",
+    titleKey: "howItWorks.step4.title",
+    title: "Get notified — and buy",
+    textKey: "howItWorks.step4.text",
+    text: "Receive a Telegram message the moment the price drops or the item is back in stock, and buy at the right time.",
+  },
+];
+---
+
+<section class="relative bg-white py-20 px-6 lg:py-32">
+  
+    <div class="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+    <ShapeGrid
+      client:load
+      shape="hexagon"
+      squareSize={200}
+      speed={0.2}
+      direction="up"
+      borderColor="#457de6"
+      hoverFillColor="transparent"
+      className="blur-sm opacity-70"
+    />
+  </div>
+  
+  <div class="container mx-auto px-6">
+    <div class="mx-auto mb-16 max-w-3xl text-center text-balance">
+      <h2
+        data-i18n="howItWorks.title"
+        class="mt-3 text-3xl font-bold text-slate-900 md:text-5xl"
+      >
+        How SurPrice Bot tracks prices for you
+      </h2>
+      <p data-i18n="howItWorks.subtitle" class="mx-auto mt-5 max-w-2xl text-lg text-slate-500">
+        SurPrice Bot checks store pages for you, so you don't have to refresh them by hand.
+      </p>
+    </div>
+
+    <div class="grid items-start gap-12 lg:grid-cols-[1fr_500px]">
+      <div class="grid gap-6 sm:grid-cols-2">
+        {
+          steps.map((s) => (
+            <FeatureCard
+              variant="light"
+              badge={s.n}
+              titleKey={s.titleKey}
+              title={s.title}
+              textKey={s.textKey}
+              text={s.text}
+            />
+          ))
+        }
+      </div>
+
+      <div class="hidden lg:block">
+        <FlowCarousel slides={slides} variant="light" client:load />
+      </div>
+    </div>
+
+    <p data-i18n="howItWorks.footnote" class="mx-auto mt-10 max-w-3xl text-center text-lg text-slate-400">
+      Useful for electronics, kids' products, home goods, accessories, marketplace listings and seasonal shopping.
+    </p>
+  </div>
+</section>

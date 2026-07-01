@@ -295,7 +295,7 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
     text: (document.body?.innerText || document.body?.textContent || "").trim().slice(0, 500),
     price_text: "",
     price_token_index: -1,
-    title: document.title || "",
+    title: (document.querySelector("h1")?.innerText?.trim() || document.querySelector("h1")?.textContent?.trim() || document.title || "").trim(),
     total_found: blocks.length
   };
   item.priceEl.setAttribute("data-price-tracker-price-candidate", "selected");
@@ -307,7 +307,7 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
     text: (item.block.innerText || item.block.textContent || "").trim().slice(0, 500),
     price_text: item.priceText.slice(0, 500),
     price_token_index: item.tokenIndex,
-    title: document.title || "",
+    title: (document.querySelector("h1")?.innerText?.trim() || document.querySelector("h1")?.textContent?.trim() || document.title || "").trim(),
     total_found: blocks.length
   };
 })()`, string(priceJSON), index)

@@ -35,8 +35,13 @@ var botTexts = map[string]map[string]string{
 		"menu_stale":              "This choice is no longer active.",
 		"menu_unknown_button":     "I did not understand this button.",
 		"menu_unknown_interval":   "I did not understand the selected interval.",
-		"help":                    "Send a product link, then the current price. Commands:\n/list — tracker list\n/delete <id> — delete\n/check <id> — check now\n/history <id> — change history",
+		"help":                    "Send a product link, then the current price. Commands:\n/list — tracker list\n/lang — change language\n/delete <id> — delete\n/check <id> — check now\n/history <id> — change history",
 		"send_link_or_help":       "Send a product link to track or /help.",
+		"choose_tracking_mode":    "What do you want to track?",
+		"button_track_price":      "💰 Price",
+		"button_track_stock":      "📦 Availability",
+		"stock_search_started":    "Checking availability on the page...",
+		"stock_tracker_created":   "✅ Tracker created!\n\n<b>%s</b>\n🔗 %s\n📦 %s\nI will notify you when this changes.\nID: <code>%s</code>",
 		"button_trackers":         "My trackers",
 		"button_back":             "Back",
 		"button_yes":              "Yes",
@@ -56,7 +61,7 @@ var botTexts = map[string]map[string]string{
 		"save_candidate_failed":   "Could not save the found block. Please try again.",
 		"candidate_caption":       "I found this block with price %s.\nIs this the correct price?",
 		"tracker_create_failed":   "Could not create the tracker.",
-		"tracker_created":         "✅ Tracker created!\n\n%s\n%s\nCheck every 3 hours.\nID: <code>%s</code>",
+		"tracker_created":         "✅ Tracker created!\n\n<b>%s</b>\n🔗 %s\n%s\nCheck every 3 hours.\nID: <code>%s</code>",
 		"tracker_created_auto":    "✅ Tracker created!\n\n%s\n%s\n📦 %s\nID: <code>%s</code>",
 		"tracker_delete_failed":   "Could not delete the tracker.",
 		"trackers_load_failed":    "Could not load trackers.",
@@ -72,6 +77,7 @@ var botTexts = map[string]map[string]string{
 		"extract_failed":          "Could not extract data.",
 		"extract_price_failed":    "Could not extract the price from the page. Enter the price manually.",
 		"manual_check_done":       "✅ Check complete\n%s\n📦 %s",
+		"manual_check_done_stock": "✅ Check complete\n📦 %s",
 		"history_load_failed":     "Could not load history.",
 		"history_title":           "📊 <b>%s</b>\n\n<i>Price history:</i>",
 		"history_empty":           "No data",
@@ -93,8 +99,13 @@ var botTexts = map[string]map[string]string{
 		"menu_stale":              "Этот выбор уже не актуален.",
 		"menu_unknown_button":     "Не понял кнопку.",
 		"menu_unknown_interval":   "Не понял выбранный интервал.",
-		"help":                    "Отправьте ссылку товара, затем текущую цену. Команды:\n/list — список трекеров\n/delete <id> — удалить\n/check <id> — проверить сейчас\n/history <id> — история изменений",
+		"help":                    "Отправьте ссылку товара, затем текущую цену. Команды:\n/list — список трекеров\n/lang — сменить язык\n/delete <id> — удалить\n/check <id> — проверить сейчас\n/history <id> — история изменений",
 		"send_link_or_help":       "Отправьте ссылку товара для трекинга или /help.",
+		"choose_tracking_mode":    "Что вы хотите отслеживать?",
+		"button_track_price":      "💰 Цену",
+		"button_track_stock":      "📦 Наличие",
+		"stock_search_started":    "Проверяю наличие товара на странице...",
+		"stock_tracker_created":   "✅ Трекер создан!\n\n<b>%s</b>\n🔗 %s\n📦 %s\nСообщу, когда это изменится.\nID: <code>%s</code>",
 		"button_trackers":         "Посмотреть мои трекеры",
 		"button_back":             "Назад",
 		"button_yes":              "Да",
@@ -114,7 +125,7 @@ var botTexts = map[string]map[string]string{
 		"save_candidate_failed":   "Не удалось сохранить найденный блок. Попробуйте заново.",
 		"candidate_caption":       "Нашёл этот блок с ценой %s.\nЭто правильная цена?",
 		"tracker_create_failed":   "Ошибка при создании трекера.",
-		"tracker_created":         "✅ Трекер создан!\n\n%s\n%s\nПроверка каждые 3 часа.\nID: <code>%s</code>",
+		"tracker_created":         "✅ Трекер создан!\n\n<b>%s</b>\n🔗 %s\n%s\nПроверка каждые 3 часа.\nID: <code>%s</code>",
 		"tracker_created_auto":    "✅ Трекер создан!\n\n%s\n%s\n📦 %s\nID: <code>%s</code>",
 		"tracker_delete_failed":   "Ошибка при удалении трекера.",
 		"trackers_load_failed":    "Ошибка загрузки трекеров.",
@@ -130,6 +141,7 @@ var botTexts = map[string]map[string]string{
 		"extract_failed":          "Не удалось извлечь данные.",
 		"extract_price_failed":    "Не удалось извлечь цену со страницы. Укажите цену вручную.",
 		"manual_check_done":       "✅ Проверка завершена\n%s\n📦 %s",
+		"manual_check_done_stock": "✅ Проверка завершена\n📦 %s",
 		"history_load_failed":     "Ошибка загрузки истории.",
 		"history_title":           "📊 <b>%s</b>\n\n<i>История цен:</i>",
 		"history_empty":           "Нет данных",
@@ -151,8 +163,13 @@ var botTexts = map[string]map[string]string{
 		"menu_stale":              "Ten wybór nie jest już aktualny.",
 		"menu_unknown_button":     "Nie rozumiem tego przycisku.",
 		"menu_unknown_interval":   "Nie rozumiem wybranego interwału.",
-		"help":                    "Wyślij link do produktu, potem aktualną cenę. Komendy:\n/list — lista trackerów\n/delete <id> — usuń\n/check <id> — sprawdź teraz\n/history <id> — historia zmian",
+		"help":                    "Wyślij link do produktu, potem aktualną cenę. Komendy:\n/list — lista trackerów\n/lang — zmień język\n/delete <id> — usuń\n/check <id> — sprawdź teraz\n/history <id> — historia zmian",
 		"send_link_or_help":       "Wyślij link do produktu albo /help.",
+		"choose_tracking_mode":    "Co chcesz śledzić?",
+		"button_track_price":      "💰 Cenę",
+		"button_track_stock":      "📦 Dostępność",
+		"stock_search_started":    "Sprawdzam dostępność produktu na stronie...",
+		"stock_tracker_created":   "✅ Tracker utworzony!\n\n<b>%s</b>\n🔗 %s\n📦 %s\nPowiadomię, gdy to się zmieni.\nID: <code>%s</code>",
 		"button_trackers":         "Moje trackery",
 		"button_back":             "Wstecz",
 		"button_yes":              "Tak",
@@ -172,7 +189,7 @@ var botTexts = map[string]map[string]string{
 		"save_candidate_failed":   "Nie udało się zapisać znalezionego bloku. Spróbuj ponownie.",
 		"candidate_caption":       "Znalazłem ten blok z ceną %s.\nCzy to poprawna cena?",
 		"tracker_create_failed":   "Nie udało się utworzyć trackera.",
-		"tracker_created":         "✅ Tracker utworzony!\n\n%s\n%s\nSprawdzanie co 3 godziny.\nID: <code>%s</code>",
+		"tracker_created":         "✅ Tracker utworzony!\n\n<b>%s</b>\n🔗 %s\n%s\nSprawdzanie co 3 godziny.\nID: <code>%s</code>",
 		"tracker_created_auto":    "✅ Tracker utworzony!\n\n%s\n%s\n📦 %s\nID: <code>%s</code>",
 		"tracker_delete_failed":   "Nie udało się usunąć trackera.",
 		"trackers_load_failed":    "Nie udało się załadować trackerów.",
@@ -188,6 +205,7 @@ var botTexts = map[string]map[string]string{
 		"extract_failed":          "Nie udało się pobrać danych.",
 		"extract_price_failed":    "Nie udało się pobrać ceny ze strony. Wpisz cenę ręcznie.",
 		"manual_check_done":       "✅ Sprawdzanie zakończone\n%s\n📦 %s",
+		"manual_check_done_stock": "✅ Sprawdzanie zakończone\n📦 %s",
 		"history_load_failed":     "Nie udało się załadować historii.",
 		"history_title":           "📊 <b>%s</b>\n\n<i>Historia cen:</i>",
 		"history_empty":           "Brak danych",
@@ -262,7 +280,7 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 				chatID = callback.From.ID
 			}
 			log.Info().Int64("user_id", callback.From.ID).Str("data", callback.Data).Msg("telegram callback")
-			handleTelegramCallback(ctx, pool, tg, chatID, userID, lang, callback.Data, log, rend)
+			handleTelegramCallback(ctx, pool, tg, chatID, userID, lang, callback.Data, log, rend, cfg)
 			return
 		}
 
@@ -289,6 +307,9 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 
 		switch {
 		case text == "/start":
+			clearTelegramState(ctx, pool, from.ID)
+			sendLanguageMenu(tg, from.ID)
+		case text == "/lang":
 			clearTelegramState(ctx, pool, from.ID)
 			sendLanguageMenu(tg, from.ID)
 		case text == "/help":
@@ -411,7 +432,15 @@ func sendBackMessage(tg *telegram.Client, chatID int64, lang, text string) {
 	_ = tg.SendMessageWithMarkup(chatID, text, markup)
 }
 
-func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, data string, log zerolog.Logger, rend *renderer.Renderer) {
+func sendModeMenu(tg *telegram.Client, chatID int64, lang, text string) {
+	markup := makeInlineKeyboard(
+		[]inlineButton{button(tr(lang, "button_track_price"), "mode:price"), button(tr(lang, "button_track_stock"), "mode:stock")},
+		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
+	)
+	_ = tg.SendMessageWithMarkup(chatID, text, markup)
+}
+
+func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, data string, log zerolog.Logger, rend *renderer.Renderer, cfg *config.Config) {
 	switch {
 	case data == "menu:list":
 		clearTelegramState(ctx, pool, chatID)
@@ -422,6 +451,27 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	case data == "menu:language":
 		clearTelegramState(ctx, pool, chatID)
 		sendLanguageMenu(tg, chatID)
+	case data == "mode:price":
+		state, ok := getTelegramState(ctx, pool, chatID)
+		if !ok || state.Step != "awaiting_mode" {
+			sendMainMenu(tg, chatID, lang, tr(lang, "menu_stale"))
+			return
+		}
+		_, err := pool.Exec(ctx, `UPDATE telegram_states SET step = 'awaiting_price', updated_at = now() WHERE telegram_id = $1`, chatID)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to switch telegram state to awaiting_price")
+			SendTelegramMessage(tg, chatID, tr(lang, "save_link_failed"))
+			return
+		}
+		sendBackMessage(tg, chatID, lang, tr(lang, "enter_price"))
+	case data == "mode:stock":
+		state, ok := getTelegramState(ctx, pool, chatID)
+		if !ok || state.Step != "awaiting_mode" {
+			sendMainMenu(tg, chatID, lang, tr(lang, "menu_stale"))
+			return
+		}
+		fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
+		createStockTrackerFromURL(ctx, pool, tg, chatID, userID, lang, state.URL, log, fetcher)
 	case data == "candidate:yes":
 		state, ok := getTelegramState(ctx, pool, chatID)
 		if !ok || state.Step != "awaiting_confirm" {
@@ -560,6 +610,7 @@ func ensureTelegramUser(ctx context.Context, pool *pgxpool.Pool, from telegram.U
 type telegramState struct {
 	Step           string
 	URL            string
+	Title          string
 	InitialPrice   float64
 	Currency       string
 	CandidateIndex int
@@ -592,9 +643,9 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 	if isURL(normalized) {
 		_, err := pool.Exec(ctx, `
 			INSERT INTO telegram_states (telegram_id, user_id, step, url)
-			VALUES ($1, $2, 'awaiting_price', $3)
+			VALUES ($1, $2, 'awaiting_mode', $3)
 			ON CONFLICT (telegram_id) DO UPDATE
-			SET user_id = $2, step = 'awaiting_price', url = $3, initial_price = NULL,
+			SET user_id = $2, step = 'awaiting_mode', url = $3, initial_price = NULL,
 			    candidate_index = 0, rule = NULL, updated_at = now()
 		`, chatID, userID, normalized)
 		if err != nil {
@@ -607,7 +658,7 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 			Str("user_id", userID).
 			Str("url", normalized).
 			Msg("telegram tracker URL received")
-		sendBackMessage(tg, chatID, lang, tr(lang, "enter_price"))
+		sendModeMenu(tg, chatID, lang, tr(lang, "choose_tracking_mode"))
 		return true
 	}
 
@@ -616,6 +667,9 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 	}
 
 	switch state.Step {
+	case "awaiting_mode":
+		sendModeMenu(tg, chatID, lang, tr(lang, "choose_tracking_mode"))
+		return true
 	case "awaiting_price":
 		price, currency, ok := parsePriceInput(normalized)
 		if !ok {
@@ -684,9 +738,9 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 func getTelegramState(ctx context.Context, pool *pgxpool.Pool, telegramID int64) (telegramState, bool) {
 	var state telegramState
 	err := pool.QueryRow(ctx, `
-		SELECT step, COALESCE(url, ''), COALESCE(initial_price, 0), COALESCE(currency, 'PLN'), candidate_index, COALESCE(rule, '{}'::jsonb)
+		SELECT step, COALESCE(url, ''), COALESCE(title, ''), COALESCE(initial_price, 0), COALESCE(currency, 'PLN'), candidate_index, COALESCE(rule, '{}'::jsonb)
 		FROM telegram_states WHERE telegram_id = $1
-	`, telegramID).Scan(&state.Step, &state.URL, &state.InitialPrice, &state.Currency, &state.CandidateIndex, &state.Rule)
+	`, telegramID).Scan(&state.Step, &state.URL, &state.Title, &state.InitialPrice, &state.Currency, &state.CandidateIndex, &state.Rule)
 	return state, err == nil
 }
 
@@ -743,12 +797,12 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	})
 
 	_, err = pool.Exec(ctx, `
-		INSERT INTO telegram_states (telegram_id, user_id, step, url, initial_price, currency, candidate_index, rule)
-		VALUES ($1, $2, 'awaiting_confirm', $3, $4, $5, $6, $7)
+		INSERT INTO telegram_states (telegram_id, user_id, step, url, title, initial_price, currency, candidate_index, rule)
+		VALUES ($1, $2, 'awaiting_confirm', $3, $8, $4, $5, $6, $7)
 		ON CONFLICT (telegram_id) DO UPDATE
-		SET user_id = $2, step = 'awaiting_confirm', url = $3, initial_price = $4,
+		SET user_id = $2, step = 'awaiting_confirm', url = $3, title = $8, initial_price = $4,
 		    currency = $5, candidate_index = $6, rule = $7, updated_at = now()
-	`, chatID, userID, url, price, currency, index, rule)
+	`, chatID, userID, url, price, currency, index, rule, candidate.Title)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to save price candidate state")
 		SendTelegramMessage(tg, chatID, tr(lang, "save_candidate_failed"))
@@ -792,12 +846,17 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 }
 
 func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string, state telegramState, log zerolog.Logger) {
+	title := state.Title
+	if title == "" {
+		title = extractDomain(state.URL)
+	}
+
 	var trackerID string
 	err := pool.QueryRow(ctx, `
 		INSERT INTO trackers (user_id, url, normalized_url, domain, title, initial_price, current_price, currency, current_stock_status, extraction_rule, extraction_confidence, status, next_check_at)
-		VALUES ($1, $2, $2, $3, $3, $4, $4, $5, 'unknown', $6, 0.9, 'active', now() + interval '3 hours')
+		VALUES ($1, $2, $2, $3, $4, $5, $5, $6, 'unknown', $7, 0.9, 'active', now() + interval '3 hours')
 		RETURNING id
-	`, userID, state.URL, extractDomain(state.URL), state.InitialPrice, state.Currency, state.Rule).Scan(&trackerID)
+	`, userID, state.URL, extractDomain(state.URL), title, state.InitialPrice, state.Currency, state.Rule).Scan(&trackerID)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to create tracker from telegram state")
 		SendTelegramMessage(tg, chatID, tr(lang, "tracker_create_failed"))
@@ -807,6 +866,7 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		Int64("telegram_id", chatID).
 		Str("user_id", userID).
 		Str("tracker_id", trackerID).
+		Str("title", title).
 		Str("url", state.URL).
 		Float64("price", state.InitialPrice).
 		Str("currency", state.Currency).
@@ -822,11 +882,74 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
 		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
 	)
-	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_created"), state.URL, formatMoney(state.InitialPrice), trackerID[:8]), markup)
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_created"), title, state.URL, formatMoney(state.InitialPrice), trackerID[:8]), markup)
+}
+
+func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, fetcher *extractor.PageFetcher) {
+	SendTelegramMessage(tg, chatID, tr(lang, "stock_search_started"))
+
+	body, err := fetcher.Fetch(url)
+	if err != nil {
+		log.Error().Err(err).Str("url", url).Msg("failed to fetch page for stock tracker")
+		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "page_load_failed_detail"), err.Error()))
+		clearTelegramState(ctx, pool, chatID)
+		return
+	}
+
+	stockStatus := extractor.DetectStockStatusFromText(body)
+
+	generic := extractor.NewGeneric()
+	result, _ := generic.Extract(body, url)
+	title := ""
+	if result != nil {
+		title = result.Title
+	}
+	if title == "" {
+		title = extractDomain(url)
+	}
+
+	var trackerID string
+	err = pool.QueryRow(ctx, `
+		INSERT INTO trackers (user_id, url, normalized_url, domain, title, initial_price, current_price, currency, current_stock_status, tracking_mode, status, next_check_at)
+		VALUES ($1, $2, $2, $3, $4, 0, NULL, 'PLN', $5, 'stock', 'active', now() + interval '3 hours')
+		RETURNING id
+	`, userID, url, extractDomain(url), title, stockStatus).Scan(&trackerID)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create stock tracker")
+		SendTelegramMessage(tg, chatID, tr(lang, "tracker_create_failed"))
+		clearTelegramState(ctx, pool, chatID)
+		return
+	}
+	log.Info().
+		Int64("telegram_id", chatID).
+		Str("user_id", userID).
+		Str("tracker_id", trackerID).
+		Str("title", title).
+		Str("url", url).
+		Str("stock_status", stockStatus).
+		Msg("telegram stock tracker created")
+
+	pool.Exec(ctx, `
+		INSERT INTO stock_points (id, tracker_id, stock_status, source, status)
+		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success')
+	`, trackerID, stockStatus)
+
+	clearTelegramState(ctx, pool, chatID)
+	markup := makeInlineKeyboard(
+		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
+		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
+	)
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "stock_tracker_created"), title, url, stockStatus, trackerID[:8]), markup)
 }
 
 func clearTelegramState(ctx context.Context, pool *pgxpool.Pool, telegramID int64) {
 	_, _ = pool.Exec(ctx, `DELETE FROM telegram_states WHERE telegram_id = $1`, telegramID)
+}
+
+type trackerListRow struct {
+	id, url, title, currency, stockStatus, status string
+	price                                          *float64
+	interval                                       int
 }
 
 func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string, log zerolog.Logger) {
@@ -840,36 +963,39 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	}
 	defer rows.Close()
 
-	var lines []string
-	var rowsMarkup [][]inlineButton
+	var trackers []trackerListRow
 	for rows.Next() {
-		var id, url, title, currency, stockStatus, status string
-		var price *float64
-		var interval int
-		rows.Scan(&id, &url, &title, &price, &currency, &stockStatus, &status, &interval)
-
-		line := fmt.Sprintf("🔹 <b>%s</b>", truncate(title, 30))
-		if price != nil {
-			line += "\n   " + formatMoney(*price)
-		}
-		line += fmt.Sprintf("\n   📦 %s | %s", stockStatus, status)
-		line += fmt.Sprintf("\n   ⏱ %s", formatInterval(lang, interval))
-		line += fmt.Sprintf("\n   ID: <code>%s</code>", id[:8])
-		lines = append(lines, line)
-		shortID := id[:8]
-		rowsMarkup = append(rowsMarkup,
-			[]inlineButton{button(tr(lang, "button_edit"), "tracker:edit:"+shortID), button(tr(lang, "button_delete"), "tracker:delete:"+shortID)},
-		)
+		var t trackerListRow
+		rows.Scan(&t.id, &t.url, &t.title, &t.price, &t.currency, &t.stockStatus, &t.status, &t.interval)
+		trackers = append(trackers, t)
 	}
 
-	if len(lines) == 0 {
+	if len(trackers) == 0 {
 		sendMainMenu(tg, chatID, lang, tr(lang, "trackers_empty"))
 		return
 	}
 
-	msg := strings.Join(lines, "\n\n")
-	rowsMarkup = append(rowsMarkup, []inlineButton{button(tr(lang, "button_back"), "menu:back")})
-	_ = tg.SendMessageWithMarkup(chatID, msg, makeInlineKeyboard(rowsMarkup...))
+	for i, t := range trackers {
+		shortID := t.id[:8]
+
+		card := fmt.Sprintf("🔹 <b>%s</b>", truncate(t.title, 60))
+		if t.price != nil {
+			card += fmt.Sprintf("\n💰 %.2f %s", *t.price, t.currency)
+		}
+		card += fmt.Sprintf("\n📦 %s | %s", t.stockStatus, t.status)
+		card += fmt.Sprintf("\n⏱ %s", formatInterval(lang, t.interval))
+		card += fmt.Sprintf("\n🔗 %s", extractDomain(t.url))
+		card += fmt.Sprintf("\nID: <code>%s</code>", shortID)
+
+		kbd := [][]inlineButton{
+			{button(tr(lang, "button_edit"), "tracker:edit:"+shortID), button(tr(lang, "button_delete"), "tracker:delete:"+shortID)},
+		}
+		if i == len(trackers)-1 {
+			kbd = append(kbd, []inlineButton{button(tr(lang, "button_back"), "menu:back")})
+		}
+
+		_ = tg.SendMessageWithMarkup(chatID, card, makeInlineKeyboard(kbd...))
+	}
 }
 
 func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, rend *renderer.Renderer, cookiesFile, proxyURL string) {
@@ -939,8 +1065,8 @@ func handleDeleteTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 }
 
 func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, trackerID string, log zerolog.Logger, rend *renderer.Renderer, cookiesFile, proxyURL string) {
-	var url, currency string
-	err := pool.QueryRow(ctx, `SELECT url, currency FROM trackers WHERE id::text LIKE $1 || '%' AND user_id = $2`, trackerID, userID).Scan(&url, &currency)
+	var url, currency, trackingMode string
+	err := pool.QueryRow(ctx, `SELECT url, currency, tracking_mode FROM trackers WHERE id::text LIKE $1 || '%' AND user_id = $2`, trackerID, userID).Scan(&url, &currency, &trackingMode)
 	if err != nil {
 		SendTelegramMessage(tg, chatID, tr(lang, "tracker_not_found"))
 		return
@@ -950,6 +1076,14 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	body, err := fetcher.Fetch(url)
 	if err != nil {
 		SendTelegramMessage(tg, chatID, tr(lang, "page_load_failed"))
+		return
+	}
+
+	if trackingMode == "stock" {
+		stockStatus := extractor.DetectStockStatusFromText(body)
+		pool.Exec(ctx, `INSERT INTO stock_points (id, tracker_id, stock_status, source, status) VALUES (gen_random_uuid(), $1, $2, 'manual_check', 'success')`, trackerID, stockStatus)
+		pool.Exec(ctx, `UPDATE trackers SET previous_stock_status = current_stock_status, current_stock_status = $2, last_checked_at = now(), next_check_at = now() + (check_interval_minutes * interval '1 minute'), consecutive_errors = 0, last_error = NULL WHERE id::text LIKE $1 || '%'`, trackerID, stockStatus)
+		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "manual_check_done_stock"), stockStatus))
 		return
 	}
 

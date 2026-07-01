@@ -3,10 +3,23 @@ import InfoBanner from "@/components/landing/InfoBanner.astro";
 import Hero from "../components/landing/Hero.astro";
 import Layout from "../layouts/Layout.astro";
 import UsefullFor from "@/components/landing/UsefullFor.astro";
+import HowItWorks from "@/components/landing/HowItWorks.astro";
+import WhatToTrack from "@/components/landing/WhatToTrack.astro";
+import TelegramAdvantages from "@/components/landing/TelegramAdvantages.astro";
+import FAQ from "@/components/landing/FAQ.astro";
+import Limitations from "@/components/landing/Limitations.astro";
 ---
 
-<Layout title="Price Tracker — отслеживание цен в Telegram">
+<Layout
+  title="Telegram Price Tracker Bot — SurPrice Bot"
+  description="Track product prices, discounts and availability across online stores. Get Telegram alerts when prices drop or products come back in stock."
+>
   <Hero />
   <InfoBanner />
+  <HowItWorks />
+  <WhatToTrack />
   <UsefullFor />
+  <TelegramAdvantages />
+  <FAQ />
+  <Limitations />
 </Layout>

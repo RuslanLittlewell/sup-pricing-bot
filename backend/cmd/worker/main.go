@@ -89,7 +89,7 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 
 	rows, err := pool.Query(ctx, `
 		SELECT id, url, extraction_rule, currency, current_price, current_stock_status,
-		       consecutive_errors, check_interval_minutes
+		       consecutive_errors, check_interval_minutes, tracking_mode
 		FROM trackers
 		WHERE status = 'active' AND next_check_at <= now()
 		ORDER BY next_check_at
@@ -112,13 +112,72 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 			currentStockStatus string
 			consecutiveErrors  int
 			checkInterval      int
+			trackingMode       string
 		)
-		if err := rows.Scan(&id, &url, &extractionRuleJSON, &currency, &currentPrice, &currentStockStatus, &consecutiveErrors, &checkInterval); err != nil {
+		if err := rows.Scan(&id, &url, &extractionRuleJSON, &currency, &currentPrice, &currentStockStatus, &consecutiveErrors, &checkInterval, &trackingMode); err != nil {
 			log.Error().Err(err).Msg("failed to scan tracker")
+			continue
+		}
+		if trackingMode == "stock" {
+			processStockTracker(ctx, pool, fetcher, id, url, consecutiveErrors, checkInterval, log)
 			continue
 		}
 		processTracker(ctx, pool, rend, fetcher, zara, generic, id, url, extractionRuleJSON, currency, currentPrice, consecutiveErrors, checkInterval, log)
 	}
+}
+
+func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extractor.PageFetcher,
+	id, url string, consecutiveErrors, checkInterval int, log zerolog.Logger) {
+	if checkInterval <= 0 {
+		checkInterval = 180
+	}
+
+	log.Info().Str("tracker_id", id).Str("url", url).Msg("checking stock tracker")
+
+	body, err := fetcher.Fetch(url)
+	if err != nil {
+		log.Error().Err(err).Str("tracker_id", id).Msg("stock fetch failed")
+		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
+		return
+	}
+
+	stockStatus := extractor.DetectStockStatusFromText(body)
+
+	pool.Exec(ctx, `
+		INSERT INTO stock_points (id, tracker_id, stock_status, source, status)
+		VALUES (gen_random_uuid(), $1, $2, 'worker_check', 'success')
+	`, id, stockStatus)
+
+	var prevStockStatus string
+	pool.QueryRow(ctx, `SELECT current_stock_status FROM trackers WHERE id = $1`, id).Scan(&prevStockStatus)
+
+	pool.Exec(ctx, `
+		UPDATE trackers SET
+			previous_stock_status = current_stock_status,
+			current_stock_status = $2,
+			last_checked_at = now(),
+			next_check_at = now() + ($3 * interval '1 minute'),
+			consecutive_errors = 0,
+			last_error = NULL,
+			updated_at = now()
+		WHERE id = $1
+	`, id, stockStatus, checkInterval)
+
+	if prevStockStatus != "" && prevStockStatus != stockStatus {
+		notifType := "stock_changed"
+		if stockStatus == "in_stock" {
+			notifType = "back_in_stock"
+		} else if stockStatus == "out_of_stock" {
+			notifType = "out_of_stock"
+		}
+		pool.Exec(ctx, `
+			INSERT INTO notifications (id, user_id, tracker_id, type, old_stock_status, new_stock_status, status)
+			SELECT gen_random_uuid(), user_id, $1, $2, $3, $4, 'pending'
+			FROM trackers WHERE id = $1
+		`, id, notifType, prevStockStatus, stockStatus)
+	}
+
+	log.Info().Str("tracker_id", id).Str("stock_status", stockStatus).Msg("stock tracker checked successfully")
 }
 
 func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
