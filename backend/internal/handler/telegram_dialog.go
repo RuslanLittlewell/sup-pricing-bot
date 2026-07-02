@@ -161,7 +161,7 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 }
 
 // notifyStillSearching lets the user know a price search is taking longer than usual.
-// SerpApi's cold-search fallback can take up to ~45s — long enough that without this
+// Search fallback calls can take up to ~45s — long enough that without this
 // notice a user might think the bot stalled. It edits statusMsgID in place when one is
 // available (so we don't spam a new message for every progress update); otherwise it
 // sends a new message, since some call sites (e.g. /add, /check) never show an initial
@@ -177,14 +177,14 @@ func notifyStillSearching(tg *telegram.Client, chatID int64, statusMsgID int, la
 }
 
 // sendTextPriceCandidate is the no-screenshot fallback for sendNextPriceCandidate: it
-// runs the same extraction cascade the worker uses (attribute-based → generic → SerpApi) over a
+// runs the same extraction cascade the worker uses (attribute-based → generic → search fallback) over a
 // plain fetch of the page, and if a price comes out, offers it to the user as text — full
 // price with currency and the source it was read from — with the usual yes/no
 // confirmation. On "yes" the tracker is created with the extractor's rule instead of a
 // css_text selector, so periodic checks re-extract the same way. Returns false if no
 // price could be extracted (the caller then reports the original failure). statusMsgID,
 // when non-zero, is the id of an existing "searching..." message to update in place
-// right before the slow SerpApi call, instead of leaving the user staring at a stale
+// right before the slow fallback call, instead of leaving the user staring at a stale
 // status with no feedback.
 func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, fallbackCurrency string, log zerolog.Logger, fetcher *extractor.PageFetcher, statusMsgID int) bool {
 	if fetcher == nil {
@@ -193,9 +193,9 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	body, err := fetcher.Fetch(url)
 	if err != nil {
 		log.Warn().Err(err).Str("url", url).Msg("text price candidate: fetch failed")
-		if serp := extractor.NewSerpAPI(); serp != nil {
+		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, statusMsgID, lang)
-			if result, serpErr := serp.Extract(nil, url); serpErr == nil && len(result.Candidates) > 0 {
+			if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
 				return offerTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, fallbackCurrency, result, log)
 			}
 		}
@@ -207,9 +207,9 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		result, err = extractor.NewGeneric().Extract(body, url)
 	}
 	if err != nil || len(result.Candidates) == 0 {
-		if serp := extractor.NewSerpAPI(); serp != nil {
+		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, statusMsgID, lang)
-			result, err = serp.Extract(body, url)
+			result, err = fallback.Extract(body, url)
 		}
 	}
 	if err != nil || len(result.Candidates) == 0 {
@@ -222,8 +222,7 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 // offerTextPriceCandidate saves the first candidate from an already-produced
 // ExtractionResult as a pending confirmation and shows it to the user as text. It's the
 // shared tail of sendTextPriceCandidate's two paths: the normal one (page fetched, ran
-// through attribute-based/generic/SerpApi) and the fetch-failed one (page unreachable, only
-// SerpApi's cached rich snippet was available).
+// through attribute-based/generic/search fallback) and the fetch-failed one.
 func offerTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, fallbackCurrency string, result *extractor.ExtractionResult, log zerolog.Logger) bool {
 	candidate := result.Candidates[0]
 	price, _, ok := parsePriceInput(candidate.Price)
@@ -299,7 +298,7 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	if err != nil {
 		log.Error().Err(err).Str("url", url).Float64("price", price).Int("index", index).Msg("failed to find price block")
 		// The screenshot path failed, but the extraction pipeline (JSON-LD → meta →
-		// microdata → CSS → SerpApi) may still read a price off the page. Offering that as a
+		// microdata → CSS → search fallback) may still read a price off the page. Offering that as a
 		// text-only candidate lets the user confirm we reached a real price source even
 		// when no visual block can be captured. Only on the first attempt: retries with
 		// index > 0 would just rediscover the same extraction result in a loop.

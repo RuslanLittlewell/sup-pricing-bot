@@ -242,9 +242,9 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 	fetcher := extractor.NewPageFetcher(rend, cookiesFile, proxyURL)
 	body, err := fetcher.Fetch(url)
 	if err != nil {
-		if serp := extractor.NewSerpAPI(); serp != nil {
+		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, 0, lang)
-			if result, serpErr := serp.Extract(nil, url); serpErr == nil && len(result.Candidates) > 0 {
+			if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
 				finishAddTracker(ctx, pool, tg, chatID, userID, lang, url, result, log)
 				return
 			}
@@ -260,9 +260,9 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 		result, err = generic.Extract(body, url)
 	}
 	if err != nil || len(result.Candidates) == 0 {
-		if serp := extractor.NewSerpAPI(); serp != nil {
+		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, 0, lang)
-			result, err = serp.Extract(body, url)
+			result, err = fallback.Extract(body, url)
 		}
 	}
 	if err != nil || len(result.Candidates) == 0 {
@@ -275,8 +275,8 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 
 // finishAddTracker is the shared tail of handleAddTracker: it persists the first
 // candidate from an already-produced ExtractionResult as a new tracker. Shared between
-// the normal path (page fetched, ran through attribute-based/generic/SerpApi) and the fetch-failed
-// path (page unreachable, only SerpApi's cached rich snippet was available).
+// the normal path (page fetched, ran through attribute-based/generic/search fallback)
+// and the fetch-failed path.
 func finishAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, result *extractor.ExtractionResult, log zerolog.Logger) {
 	candidate := result.Candidates[0]
 	newPrice := 0.0
@@ -337,9 +337,9 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	body, err := fetcher.Fetch(url)
 	if err != nil {
 		if trackingMode != "stock" {
-			if serp := extractor.NewSerpAPI(); serp != nil {
+			if fallback := extractor.NewSearchFallback(); fallback != nil {
 				notifyStillSearching(tg, chatID, 0, lang)
-				if result, serpErr := serp.Extract(nil, url); serpErr == nil && len(result.Candidates) > 0 {
+				if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
 					finishCheckTracker(ctx, pool, tg, chatID, lang, trackerID, currency, result)
 					return
 				}
@@ -364,9 +364,9 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 		result, err = generic.Extract(body, url)
 	}
 	if err != nil || len(result.Candidates) == 0 {
-		if serp := extractor.NewSerpAPI(); serp != nil {
+		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, 0, lang)
-			result, err = serp.Extract(body, url)
+			result, err = fallback.Extract(body, url)
 		}
 	}
 	if err != nil || len(result.Candidates) == 0 {
@@ -380,7 +380,7 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 // finishCheckTracker is the shared tail of handleCheckTracker: it persists the first
 // candidate from an already-produced ExtractionResult as the tracker's latest reading.
 // Shared between the normal path (page fetched) and the fetch-failed path (page
-// unreachable, only SerpApi's cached rich snippet was available).
+// unreachable, only the search fallback was available).
 func finishCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, lang, trackerID, fallbackCurrency string, result *extractor.ExtractionResult) {
 	candidate := result.Candidates[0]
 	newPrice := 0.0

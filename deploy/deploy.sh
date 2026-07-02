@@ -30,6 +30,7 @@ BOT_USERNAME="${BOT_USERNAME:-$(dotenv_get BOT_USERNAME)}"
 BOT_USERNAME="${BOT_USERNAME:-sur_price_bot}"
 SCRAPER_COOKIES_FILE="${SCRAPER_COOKIES_FILE:-$(dotenv_get SCRAPER_COOKIES_FILE)}"
 SCRAPER_PROXY_URL="${SCRAPER_PROXY_URL:-$(dotenv_get SCRAPER_PROXY_URL)}"
+SERPER_API_KEY="${SERPER_API_KEY:-$(dotenv_get SERPER_API_KEY)}"
 SERPAPI_KEY="${SERPAPI_KEY:-$(dotenv_get SERPAPI_KEY)}"
 SERPAPI_KEY_2="${SERPAPI_KEY_2:-$(dotenv_get SERPAPI_KEY_2)}"
 
@@ -98,7 +99,7 @@ run_remote "cd '${DEPLOY_DIR}' && \
   if ! grep -q '^POSTGRES_PASSWORD=' .env.production; then echo POSTGRES_PASSWORD=\$(openssl rand -hex 24) >> .env.production; fi && \
   if ! grep -q '^BETTER_AUTH_SECRET=' .env.production; then echo BETTER_AUTH_SECRET=\$(openssl rand -hex 32) >> .env.production; fi && \
   if ! grep -q '^ADMIN_TOKEN=' .env.production; then echo ADMIN_TOKEN=\$(openssl rand -hex 32) >> .env.production; fi && \
-  grep -v -E '^(APP_DOMAIN|API_DOMAIN|FRONTEND_HOST_PORT|BACKEND_HOST_PORT|TELEGRAM_BOT_TOKEN|BOT_USERNAME|SCRAPER_PROXY_URL|SERPAPI_KEY|SERPAPI_KEY_2)=' .env.production > .env.production.tmp && mv .env.production.tmp .env.production && \
+  grep -v -E '^(APP_DOMAIN|API_DOMAIN|FRONTEND_HOST_PORT|BACKEND_HOST_PORT|TELEGRAM_BOT_TOKEN|BOT_USERNAME|SCRAPER_PROXY_URL|SERPER_API_KEY|SERPAPI_KEY|SERPAPI_KEY_2)=' .env.production > .env.production.tmp && mv .env.production.tmp .env.production && \
   printf '%s\n' \
     'APP_DOMAIN=${APP_DOMAIN}' \
     'API_DOMAIN=${API_DOMAIN}' \
@@ -107,6 +108,7 @@ run_remote "cd '${DEPLOY_DIR}' && \
     'TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}' \
     'BOT_USERNAME=${BOT_USERNAME}' \
     'SCRAPER_PROXY_URL=${SCRAPER_PROXY_URL}' \
+    'SERPER_API_KEY=${SERPER_API_KEY}' \
     'SERPAPI_KEY=${SERPAPI_KEY}' \
     'SERPAPI_KEY_2=${SERPAPI_KEY_2}' >> .env.production"
 
