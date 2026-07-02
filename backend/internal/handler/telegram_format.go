@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 func extractDomain(url string) string {
@@ -23,7 +24,8 @@ func isURL(text string) bool {
 
 func parsePriceInput(text string) (float64, string, bool) {
 	re := regexp.MustCompile(`\d+(?:[\s.,]\d+)*`)
-	match := re.FindString(text)
+	normalizedText := normalizeUnicodeSpaces(text)
+	match := re.FindString(normalizedText)
 	if match == "" {
 		return 0, "PLN", false
 	}
@@ -75,7 +77,12 @@ func formatInterval(lang string, minutes int) string {
 }
 
 func normalizePriceNumber(text string) string {
-	normalized := strings.ReplaceAll(text, " ", "")
+	normalized := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, text)
 	if strings.Contains(normalized, ",") && strings.Contains(normalized, ".") {
 		if strings.LastIndex(normalized, ",") > strings.LastIndex(normalized, ".") {
 			normalized = strings.ReplaceAll(normalized, ".", "")
@@ -89,6 +96,15 @@ func normalizePriceNumber(text string) string {
 		return strings.ReplaceAll(normalized, ",", ".")
 	}
 	return strings.ReplaceAll(normalized, ",", "")
+}
+
+func normalizeUnicodeSpaces(text string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return ' '
+		}
+		return r
+	}, text)
 }
 
 func detectCurrency(text string) string {

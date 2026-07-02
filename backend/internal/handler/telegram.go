@@ -26,7 +26,7 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 		}
 		// Acknowledge Telegram immediately and flush it over the wire before doing any
 		// real work. Without an explicit flush, Go may buffer the response until the
-		// handler returns — and price extraction below can take 40+ seconds (SerpApi
+		// handler returns — and price extraction below can take 40+ seconds (search
 		// fallback). If Telegram doesn't see the 200 in time it retries the same update,
 		// which is why a single message could otherwise be processed (and answered) twice.
 		w.WriteHeader(http.StatusOK)
@@ -72,7 +72,7 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 				chatID = callback.From.ID
 			}
 			log.Info().Int64("user_id", callback.From.ID).Str("data", callback.Data).Msg("telegram callback")
-			handleTelegramCallback(ctx, pool, tg, chatID, userID, lang, callback.Data, log, rend, cfg)
+			handleTelegramCallback(ctx, pool, tg, chatID, callback.Message.MessageID, userID, lang, callback.Data, log, rend, cfg)
 			return
 		}
 
@@ -185,7 +185,7 @@ func handleStartAndLink(pool *pgxpool.Pool, tg *telegram.Client, from telegram.U
 	sendLanguageMenu(tg, from.ID)
 }
 
-func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, data string, log zerolog.Logger, rend *renderer.Renderer, cfg *config.Config) {
+func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, messageID int, userID, lang, data string, log zerolog.Logger, rend *renderer.Renderer, cfg *config.Config) {
 	switch {
 	case data == "menu:list":
 		clearTelegramState(ctx, pool, chatID)
@@ -271,8 +271,22 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy))
 	case strings.HasPrefix(data, "tracker:delete:"):
 		trackerID := strings.TrimPrefix(data, "tracker:delete:")
-		handleDeleteTracker(ctx, pool, tg, chatID, userID, lang, trackerID, log)
-		handleListTrackers(ctx, pool, tg, chatID, userID, lang, log)
+		found, err := deleteTrackerRow(ctx, pool, userID, trackerID)
+		if err != nil {
+			SendTelegramMessage(tg, chatID, tr(lang, "tracker_delete_failed"))
+			return
+		}
+		if !found {
+			SendTelegramMessage(tg, chatID, tr(lang, "tracker_not_found"))
+			return
+		}
+		// Just remove this tracker's own card instead of resending the whole list —
+		// deleting one tracker shouldn't reprint every other tracker's card again.
+		if messageID != 0 {
+			if err := tg.DeleteMessage(chatID, messageID); err != nil {
+				log.Warn().Err(err).Int("message_id", messageID).Msg("failed to delete tracker card message")
+			}
+		}
 	case strings.HasPrefix(data, "tracker:edit:"):
 		trackerID := strings.TrimPrefix(data, "tracker:edit:")
 		_, _ = pool.Exec(ctx, `

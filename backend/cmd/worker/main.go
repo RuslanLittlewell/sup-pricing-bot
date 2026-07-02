@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
@@ -59,13 +60,15 @@ func main() {
 	fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
 	attributeExtractor := extractor.NewAttribute()
 	genericExtractor := extractor.NewGeneric()
-	serpExtractor := extractor.NewSerpAPI()
-	if serpExtractor == nil {
-		log.Warn().Msg("SERPAPI_KEY not set — SerpApi fallback disabled")
+	searchFallback := extractor.NewSearchFallback()
+	if searchFallback == nil {
+		log.Warn().Msg("search fallback disabled: set OPEN_SERP_BASE_URL, SERPER_API_KEY, or SERPAPI_KEY")
+	} else {
+		log.Info().Str("fallback", searchFallback.Domain()).Msg("search fallback enabled")
 	}
 
 	checkTrackers := func() {
-		processTrackers(ctx, pool, rend, fetcher, attributeExtractor, genericExtractor, serpExtractor, log)
+		processTrackers(ctx, pool, rend, fetcher, attributeExtractor, genericExtractor, searchFallback, log)
 	}
 
 	sendNotifications := func() {
@@ -89,7 +92,7 @@ func main() {
 }
 
 func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
-	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, serp *extractor.SerpAPIExtractor, log zerolog.Logger) {
+	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, searchFallback extractor.Extractor, log zerolog.Logger) {
 
 	rows, err := pool.Query(ctx, `
 		SELECT id, url, extraction_rule, currency, current_price, previous_price, current_stock_status,
@@ -127,7 +130,7 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 			processStockTracker(ctx, pool, fetcher, id, url, consecutiveErrors, checkInterval, log)
 			continue
 		}
-		processTracker(ctx, pool, rend, fetcher, attr, generic, serp, id, url, extractionRuleJSON, currency, currentPrice, previousPrice, consecutiveErrors, checkInterval, log)
+		processTracker(ctx, pool, rend, fetcher, attr, generic, searchFallback, id, url, extractionRuleJSON, currency, currentPrice, previousPrice, consecutiveErrors, checkInterval, log)
 	}
 }
 
@@ -186,7 +189,7 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 }
 
 func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
-	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, serp *extractor.SerpAPIExtractor,
+	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, searchFallback extractor.Extractor,
 	id, url string, extractionRuleJSON []byte, currency string, currentPrice, previousPrice *float64,
 	consecutiveErrors int, checkInterval int, log zerolog.Logger) {
 	if checkInterval <= 0 {
@@ -195,7 +198,7 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 
 	log.Info().Str("tracker_id", id).Str("url", url).Msg("checking tracker")
 
-	newPrice, newCurrency, stockStatus, err := extractTrackerPrice(ctx, rend, fetcher, attr, generic, serp, url, extractionRuleJSON, currency, currentPrice)
+	newPrice, newCurrency, stockStatus, extractionMethod, err := extractTrackerPrice(ctx, rend, fetcher, attr, generic, searchFallback, url, extractionRuleJSON, currency, currentPrice)
 	if err != nil {
 		log.Error().Err(err).Str("tracker_id", id).Msg("extraction failed")
 		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
@@ -203,9 +206,9 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 	}
 
 	pool.Exec(ctx, `
-		INSERT INTO price_points (id, tracker_id, price, currency, source, status)
-		VALUES (gen_random_uuid(), $1, $2, $3, 'worker_check', 'success')
-	`, id, newPrice, newCurrency)
+		INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method)
+		VALUES (gen_random_uuid(), $1, $2, $3, 'worker_check', 'success', $4)
+	`, id, newPrice, newCurrency, extractionMethod)
 
 	pool.Exec(ctx, `
 		INSERT INTO stock_points (id, tracker_id, stock_status, source, status)
@@ -266,8 +269,23 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 }
 
 func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
-	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, serp *extractor.SerpAPIExtractor,
-	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, error) {
+	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, searchFallback extractor.Extractor,
+	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, string, error) {
+
+	ruleType := extractor.RuleType(extractionRuleJSON)
+	if isSearchFallbackRuleType(ruleType) {
+		if searchFallback == nil {
+			return 0, "", "", "", fmt.Errorf("search fallback disabled for %s tracker", ruleType)
+		}
+		result, err := searchFallback.Extract(nil, url)
+		if err != nil {
+			return 0, "", "", "", fmt.Errorf("search fallback extraction failed: %w", err)
+		}
+		if result == nil || len(result.Candidates) == 0 {
+			return 0, "", "", "", fmt.Errorf("search fallback did not find an exact URL price")
+		}
+		return finalizePriceResult(result, fallbackCurrency)
+	}
 
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
 		var rule struct {
@@ -278,50 +296,58 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 		if err := json.Unmarshal(extractionRuleJSON, &rule); err == nil && rule.Type == "css_text" && rule.Selector != "" {
 			text, err := rend.TextBySelector(ctx, url, rule.Selector)
 			if err != nil {
-				return 0, "", "", fmt.Errorf("rule extraction failed: %w", err)
+				return 0, "", "", "", fmt.Errorf("rule extraction failed: %w", err)
 			}
 			price, ok := parsePriceFromTextAtIndex(text, rule.PriceTokenIndex, referencePrice)
 			if !ok {
-				return 0, "", "", fmt.Errorf("failed to parse price from selected block")
+				return 0, "", "", "", fmt.Errorf("failed to parse price from selected block")
 			}
-			return price, fallbackCurrency, "unknown", nil
+			return price, fallbackCurrency, "unknown", "css_text", nil
 		}
 	}
 
 	body, err := fetcher.Fetch(url)
 	if err != nil {
 		// The page itself is unreachable (bot-blocked, timed out, ...), so no
-		// HTML-based extractor can help. SerpApi is the one tier that doesn't need the
-		// page at all — it reads the price off Google's own cached rich snippet for
-		// this URL — so it's the only thing left worth trying here.
-		if serp != nil {
-			if result, serpErr := serp.Extract(nil, url); serpErr == nil && len(result.Candidates) > 0 {
+		// HTML-based extractor can help. Search fallbacks do not need the page's
+		// current HTML, so they're the only tiers left worth trying here.
+		if searchFallback != nil {
+			if result, fallbackErr := searchFallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
 				return finalizePriceResult(result, fallbackCurrency)
 			}
 		}
-		return 0, "", "", fmt.Errorf("fetch failed: %w", err)
+		return 0, "", "", "", fmt.Errorf("fetch failed: %w", err)
 	}
 
 	result, err := attr.Extract(body, url)
 	if err != nil || len(result.Candidates) == 0 {
 		result, err = generic.Extract(body, url)
 	}
-	if (err != nil || len(result.Candidates) == 0) && serp != nil {
-		result, err = serp.Extract(body, url)
+	if (err != nil || len(result.Candidates) == 0) && searchFallback != nil {
+		result, err = searchFallback.Extract(body, url)
 	}
 
 	if err != nil || len(result.Candidates) == 0 {
-		return 0, "", "", fmt.Errorf("extraction failed")
+		return 0, "", "", "", fmt.Errorf("extraction failed")
 	}
 
 	return finalizePriceResult(result, fallbackCurrency)
 }
 
-func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency string) (float64, string, string, error) {
+func isSearchFallbackRuleType(ruleType string) bool {
+	switch ruleType {
+	case "openserp_search_result", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet":
+		return true
+	default:
+		return false
+	}
+}
+
+func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency string) (float64, string, string, string, error) {
 	candidate := result.Candidates[0]
 	newPrice, ok := parsePriceFromText(candidate.Price)
 	if !ok {
-		return 0, "", "", fmt.Errorf("failed to parse price")
+		return 0, "", "", "", fmt.Errorf("failed to parse price")
 	}
 
 	currency := candidate.Currency
@@ -332,7 +358,7 @@ func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency st
 	if stockStatus == "" {
 		stockStatus = "unknown"
 	}
-	return newPrice, currency, stockStatus, nil
+	return newPrice, currency, stockStatus, extractor.RuleType(candidate.Rule), nil
 }
 
 func handleExtractionError(ctx context.Context, pool *pgxpool.Pool, id, errMsg string, consecutiveErrors int, checkInterval int, log zerolog.Logger) {
@@ -389,7 +415,7 @@ func parsePriceFromTextAtIndex(text string, tokenIndex *int, referencePrice *flo
 
 func parsePriceTokensFromText(text string) []float64 {
 	re := regexp.MustCompile(`\d+(?:[\s.,]\d+)*`)
-	matches := re.FindAllString(text, -1)
+	matches := re.FindAllString(normalizeUnicodeSpaces(text), -1)
 	prices := make([]float64, 0, len(matches))
 	for _, match := range matches {
 		if price, ok := parsePriceToken(match); ok {
@@ -405,8 +431,12 @@ func parsePriceTokensFromText(text string) []float64 {
 // only when it is followed by 1-2 digits (a plausible cents value);
 // otherwise every separator is treated as a thousands grouping.
 func parsePriceToken(match string) (float64, bool) {
-	normalized := strings.ReplaceAll(match, " ", "")
-	normalized = strings.ReplaceAll(normalized, "\u00A0", "")
+	normalized := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, match)
 
 	decimalIdx := strings.LastIndex(normalized, ",")
 	if dot := strings.LastIndex(normalized, "."); dot > decimalIdx {
@@ -431,6 +461,15 @@ func parsePriceToken(match string) (float64, bool) {
 
 	price, err := strconv.ParseFloat(cleaned, 64)
 	return price, err == nil && price > 0
+}
+
+func normalizeUnicodeSpaces(text string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return ' '
+		}
+		return r
+	}, text)
 }
 
 func priceCents(price float64) int64 {

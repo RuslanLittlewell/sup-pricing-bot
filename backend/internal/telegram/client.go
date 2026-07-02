@@ -44,9 +44,10 @@ type Update struct {
 }
 
 type Message struct {
-	Text string `json:"text"`
-	From User   `json:"from"`
-	Chat Chat   `json:"chat"`
+	MessageID int    `json:"message_id"`
+	Text      string `json:"text"`
+	From      User   `json:"from"`
+	Chat      Chat   `json:"chat"`
 }
 
 type Chat struct {
@@ -187,6 +188,37 @@ func (c *Client) EditMessageText(chatID int64, messageID int, text string) error
 	resp, err := c.client.Post(c.BaseURL()+"/editMessageText", "application/json", bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("edit message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var apiResp APIResponse
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		return fmt.Errorf("parse response: %w", err)
+	}
+	if !apiResp.Ok {
+		return fmt.Errorf("telegram api error: %s", apiResp.Description)
+	}
+	return nil
+}
+
+type deleteMessageRequest struct {
+	ChatID    int64 `json:"chat_id"`
+	MessageID int   `json:"message_id"`
+}
+
+// DeleteMessage removes a message the bot previously sent — used e.g. to remove a
+// tracker's card from the list in place, instead of resending the whole list.
+func (c *Client) DeleteMessage(chatID int64, messageID int) error {
+	body := deleteMessageRequest{ChatID: chatID, MessageID: messageID}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+
+	resp, err := c.client.Post(c.BaseURL()+"/deleteMessage", "application/json", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("delete message: %w", err)
 	}
 	defer resp.Body.Close()
 

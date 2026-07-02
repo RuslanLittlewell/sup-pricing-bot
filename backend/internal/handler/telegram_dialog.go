@@ -161,7 +161,7 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 }
 
 // notifyStillSearching lets the user know a price search is taking longer than usual.
-// SerpApi's cold-search fallback can take up to ~45s — long enough that without this
+// Search fallback calls can take up to ~45s — long enough that without this
 // notice a user might think the bot stalled. It edits statusMsgID in place when one is
 // available (so we don't spam a new message for every progress update); otherwise it
 // sends a new message, since some call sites (e.g. /add, /check) never show an initial
@@ -176,27 +176,21 @@ func notifyStillSearching(tg *telegram.Client, chatID int64, statusMsgID int, la
 	SendTelegramMessage(tg, chatID, text)
 }
 
-// sendTextPriceCandidate is the no-screenshot fallback for sendNextPriceCandidate: it
-// runs the same extraction cascade the worker uses (attribute-based → generic → SerpApi) over a
-// plain fetch of the page, and if a price comes out, offers it to the user as text — full
-// price with currency and the source it was read from — with the usual yes/no
-// confirmation. On "yes" the tracker is created with the extractor's rule instead of a
-// css_text selector, so periodic checks re-extract the same way. Returns false if no
-// price could be extracted (the caller then reports the original failure). statusMsgID,
-// when non-zero, is the id of an existing "searching..." message to update in place
-// right before the slow SerpApi call, instead of leaving the user staring at a stale
-// status with no feedback.
-func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, fallbackCurrency string, log zerolog.Logger, fetcher *extractor.PageFetcher, statusMsgID int) bool {
+// sendTextPriceCandidate is the no-screenshot fallback for sendNextPriceCandidate. It
+// creates a tracker only when the fallback found the same requested URL and the exact
+// price the user entered. Ambiguous search results are logged and declined without
+// asking the user to approve a potentially unrelated price.
+func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency string, log zerolog.Logger, fetcher *extractor.PageFetcher, statusMsgID int) bool {
 	if fetcher == nil {
 		return false
 	}
 	body, err := fetcher.Fetch(url)
 	if err != nil {
 		log.Warn().Err(err).Str("url", url).Msg("text price candidate: fetch failed")
-		if serp := extractor.NewSerpAPI(); serp != nil {
+		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, statusMsgID, lang)
-			if result, serpErr := serp.Extract(nil, url); serpErr == nil && len(result.Candidates) > 0 {
-				return offerTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, fallbackCurrency, result, log)
+			if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
+				return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, result, "page fetch failed: "+err.Error(), log)
 			}
 		}
 		return false
@@ -207,24 +201,19 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		result, err = extractor.NewGeneric().Extract(body, url)
 	}
 	if err != nil || len(result.Candidates) == 0 {
-		if serp := extractor.NewSerpAPI(); serp != nil {
+		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, statusMsgID, lang)
-			result, err = serp.Extract(body, url)
+			result, err = fallback.Extract(body, url)
 		}
 	}
 	if err != nil || len(result.Candidates) == 0 {
 		return false
 	}
 
-	return offerTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, fallbackCurrency, result, log)
+	return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, result, "screenshot price block not found", log)
 }
 
-// offerTextPriceCandidate saves the first candidate from an already-produced
-// ExtractionResult as a pending confirmation and shows it to the user as text. It's the
-// shared tail of sendTextPriceCandidate's two paths: the normal one (page fetched, ran
-// through attribute-based/generic/SerpApi) and the fetch-failed one (page unreachable, only
-// SerpApi's cached rich snippet was available).
-func offerTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, fallbackCurrency string, result *extractor.ExtractionResult, log zerolog.Logger) bool {
+func handleTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency string, result *extractor.ExtractionResult, directErr string, log zerolog.Logger) bool {
 	candidate := result.Candidates[0]
 	price, _, ok := parsePriceInput(candidate.Price)
 	if !ok {
@@ -235,31 +224,50 @@ func offerTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegr
 		currency = fallbackCurrency
 	}
 
-	_, err := pool.Exec(ctx, `
-		INSERT INTO telegram_states (telegram_id, user_id, step, url, title, initial_price, currency, candidate_index, rule)
-		VALUES ($1, $2, 'awaiting_confirm', $3, $7, $4, $5, 0, $6)
-		ON CONFLICT (telegram_id) DO UPDATE
-		SET user_id = $2, step = 'awaiting_confirm', url = $3, title = $7, initial_price = $4,
-		    currency = $5, candidate_index = 0, rule = $6, updated_at = now()
-	`, chatID, userID, url, price, currency, candidate.Rule, result.Title)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to save text price candidate state")
-		return false
+	sourceMatches := candidate.SourceURL == "" || extractor.SameURL(candidate.SourceURL, url)
+	priceMatches := priceCents(price) == priceCents(expectedPrice)
+	if sourceMatches && priceMatches {
+		if isSearchFallbackRule(candidate.Rule) {
+			recordExtractionFailure(ctx, pool, userID, url, fmt.Sprintf("%s; resolved by %s exact URL+price fallback", directErr, extractor.RuleType(candidate.Rule)), log)
+		}
+		createTrackerFromState(ctx, pool, tg, chatID, userID, lang, telegramState{
+			URL:          url,
+			Title:        result.Title,
+			InitialPrice: price,
+			Currency:     currency,
+			Rule:         candidate.Rule,
+		}, log)
+		return true
 	}
+
+	errMsg := fmt.Sprintf("%s; fallback was not exact enough: expected=%.2f %s candidate=%s %s source=%q method=%s", directErr, expectedPrice, fallbackCurrency, candidate.Price, currency, candidate.SourceURL, extractor.RuleType(candidate.Rule))
+	recordExtractionFailure(ctx, pool, userID, url, errMsg, log)
 	log.Info().
 		Int64("telegram_id", chatID).
 		Str("url", url).
-		Float64("price", price).
+		Float64("expected_price", expectedPrice).
+		Float64("candidate_price", price).
 		Str("currency", currency).
 		Str("label", candidate.Label).
-		Msg("telegram text price candidate offered")
+		Str("source_url", candidate.SourceURL).
+		Msg("telegram text price candidate rejected as inexact")
 
-	markup := makeInlineKeyboard(
-		[]inlineButton{button(tr(lang, "button_yes"), "candidate:yes"), button(tr(lang, "button_no"), "candidate:no")},
-		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
-	)
-	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "candidate_text_caption"), price, currency), markup)
+	SendTelegramMessage(tg, chatID, tr(lang, "protected_site_noted"))
+	clearTelegramState(ctx, pool, chatID)
 	return true
+}
+
+func isSearchFallbackRule(rule json.RawMessage) bool {
+	switch extractor.RuleType(rule) {
+	case "openserp_search_result", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet":
+		return true
+	default:
+		return false
+	}
+}
+
+func priceCents(price float64) int64 {
+	return int64(price*100 + 0.5)
 }
 
 func getTelegramState(ctx context.Context, pool *pgxpool.Pool, telegramID int64) (telegramState, bool) {
@@ -299,12 +307,18 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	if err != nil {
 		log.Error().Err(err).Str("url", url).Float64("price", price).Int("index", index).Msg("failed to find price block")
 		// The screenshot path failed, but the extraction pipeline (JSON-LD → meta →
-		// microdata → CSS → SerpApi) may still read a price off the page. Offering that as a
+		// microdata → CSS → search fallback) may still read a price off the page. Offering that as a
 		// text-only candidate lets the user confirm we reached a real price source even
 		// when no visual block can be captured. Only on the first attempt: retries with
 		// index > 0 would just rediscover the same extraction result in a loop.
-		if index == 0 && sendTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, currency, log, fetcher, statusMsgID) {
+		if index == 0 && sendTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, price, currency, log, fetcher, statusMsgID) {
 			return
+		}
+		// Only log once we've actually given up (index == 0, the only attempt for
+		// "access denied"/"price not found"; the last retry for "no more
+		// candidates") — not on every intermediate retry for the same URL.
+		if index == 0 {
+			recordExtractionFailure(ctx, pool, userID, url, err.Error(), log)
 		}
 		errText := strings.ToLower(err.Error())
 		if strings.Contains(errText, "access denied") || strings.Contains(errText, "permission to access") {

@@ -50,8 +50,11 @@ services:
       TELEGRAM_WEBHOOK_URL: https://${API_DOMAIN}/api/telegram/webhook
       SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
       SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
       SERPAPI_KEY: ${SERPAPI_KEY:-}
       SERPAPI_KEY_2: ${SERPAPI_KEY_2:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     volumes:
       - ./secrets/scraper-cookies.json:/run/secrets/scraper-cookies.json:ro
     ports:
@@ -76,6 +79,7 @@ services:
       BOT_USERNAME: ${BOT_USERNAME}
       SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
       SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
       SERPAPI_KEY: ${SERPAPI_KEY:-}
       SERPAPI_KEY_2: ${SERPAPI_KEY_2:-}
     volumes:

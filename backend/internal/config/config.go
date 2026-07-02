@@ -13,6 +13,8 @@ type Config struct {
 	TelegramWebhook string
 	BotUsername     string
 	AdminToken      string
+	AdminUsername   string
+	AdminPassword   string
 	SessionSecret   string
 	ScraperCookies  string
 	ScraperProxy    string
@@ -35,6 +37,8 @@ func Load() *Config {
 		TelegramWebhook: getEnv("TELEGRAM_WEBHOOK_URL", ""),
 		BotUsername:     getEnv("BOT_USERNAME", ""),
 		AdminToken:      getEnv("ADMIN_TOKEN", "admin-secret"),
+		AdminUsername:   getEnv("ADMIN_USERNAME", ""),
+		AdminPassword:   getEnv("ADMIN_PASSWORD", ""),
 		SessionSecret:   getEnv("SESSION_SECRET", "change-me-in-production"),
 		ScraperCookies:  getEnv("SCRAPER_COOKIES_FILE", ""),
 		ScraperProxy:    getEnv("SCRAPER_PROXY_URL", ""),

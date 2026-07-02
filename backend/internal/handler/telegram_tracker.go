@@ -14,6 +14,20 @@ import (
 	"github.com/littlewell/price-tracker/internal/telegram"
 )
 
+// recordExtractionFailure logs a price search that failed before any tracker row could
+// be created (e.g. /add or the interactive add-by-price flow, when every extractor comes
+// up empty) — so it still shows up in the admin dashboard's failed-links list, instead of
+// vanishing with nothing to attach the failure to (trackers.last_error only exists once a
+// tracker has actually been created).
+func recordExtractionFailure(ctx context.Context, pool *pgxpool.Pool, userID, url, errMsg string, log zerolog.Logger) {
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO extraction_failures (id, user_id, url, error)
+		VALUES (gen_random_uuid(), $1, $2, $3)
+	`, userID, url, errMsg); err != nil {
+		log.Error().Err(err).Str("url", url).Msg("failed to record extraction failure")
+	}
+}
+
 // enforceTrackerLimit reports whether the user may create another tracker. When they've
 // hit their plan's max_trackers it sends an explanatory message (with an upgrade shortcut)
 // and returns false. On a transient DB error it fails open (allows creation) rather than
@@ -111,9 +125,9 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		Msg("telegram tracker created")
 
 	_, _ = pool.Exec(ctx, `
-		INSERT INTO price_points (id, tracker_id, price, currency, source, status)
-		VALUES (gen_random_uuid(), $1, $2, $3, 'bot_add', 'success')
-	`, trackerID, state.InitialPrice, state.Currency)
+		INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method)
+		VALUES (gen_random_uuid(), $1, $2, $3, 'bot_add', 'success', $4)
+	`, trackerID, state.InitialPrice, state.Currency, extractor.RuleType(state.Rule))
 
 	clearTelegramState(ctx, pool, chatID)
 	markup := makeInlineKeyboard(
@@ -185,14 +199,14 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 }
 
 type trackerListRow struct {
-	id, url, title, currency, stockStatus, status string
-	price                                         *float64
-	interval                                      int
+	id, url, title, currency, stockStatus, status, trackingMode string
+	price                                                       *float64
+	interval                                                    int
 }
 
 func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string, log zerolog.Logger) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, url, COALESCE(title, domain), current_price, currency, current_stock_status, status, check_interval_minutes
+		SELECT id, url, COALESCE(title, domain), current_price, currency, current_stock_status, status, check_interval_minutes, tracking_mode
 		FROM trackers WHERE user_id = $1 AND status != 'deleted' ORDER BY created_at DESC
 	`, userID)
 	if err != nil {
@@ -204,7 +218,7 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	var trackers []trackerListRow
 	for rows.Next() {
 		var t trackerListRow
-		rows.Scan(&t.id, &t.url, &t.title, &t.price, &t.currency, &t.stockStatus, &t.status, &t.interval)
+		rows.Scan(&t.id, &t.url, &t.title, &t.price, &t.currency, &t.stockStatus, &t.status, &t.interval, &t.trackingMode)
 		trackers = append(trackers, t)
 	}
 
@@ -217,7 +231,13 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 		shortID := t.id[:8]
 
 		card := fmt.Sprintf("🔹 <b>%s</b>", truncate(t.title, 60))
-		if t.price != nil {
+		if t.trackingMode == "stock" {
+			if t.stockStatus == "in_stock" {
+				card += fmt.Sprintf("\n📦 %s", tr(lang, "tracker_stock_available"))
+			} else {
+				card += fmt.Sprintf("\n⏳ %s", tr(lang, "tracker_stock_waiting"))
+			}
+		} else if t.price != nil {
 			card += fmt.Sprintf("\n💰 %.2f %s", *t.price, t.currency)
 		}
 		card += fmt.Sprintf("\n⏱ %s", formatInterval(lang, t.interval))
@@ -242,13 +262,17 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 	fetcher := extractor.NewPageFetcher(rend, cookiesFile, proxyURL)
 	body, err := fetcher.Fetch(url)
 	if err != nil {
-		if serp := extractor.NewSerpAPI(); serp != nil {
+		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, 0, lang)
-			if result, serpErr := serp.Extract(nil, url); serpErr == nil && len(result.Candidates) > 0 {
+			if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
+				if isSearchFallbackRule(result.Candidates[0].Rule) {
+					recordExtractionFailure(ctx, pool, userID, url, fmt.Sprintf("page fetch failed: %s; resolved by %s exact URL fallback", err.Error(), extractor.RuleType(result.Candidates[0].Rule)), log)
+				}
 				finishAddTracker(ctx, pool, tg, chatID, userID, lang, url, result, log)
 				return
 			}
 		}
+		recordExtractionFailure(ctx, pool, userID, url, err.Error(), log)
 		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "page_load_failed_detail"), err.Error()))
 		return
 	}
@@ -260,14 +284,18 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 		result, err = generic.Extract(body, url)
 	}
 	if err != nil || len(result.Candidates) == 0 {
-		if serp := extractor.NewSerpAPI(); serp != nil {
+		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, 0, lang)
-			result, err = serp.Extract(body, url)
+			result, err = fallback.Extract(body, url)
 		}
 	}
 	if err != nil || len(result.Candidates) == 0 {
+		recordExtractionFailure(ctx, pool, userID, url, "no price candidate found", log)
 		SendTelegramMessage(tg, chatID, tr(lang, "extract_price_failed"))
 		return
+	}
+	if isSearchFallbackRule(result.Candidates[0].Rule) {
+		recordExtractionFailure(ctx, pool, userID, url, fmt.Sprintf("page fetched but direct extractors failed; resolved by %s exact URL fallback", extractor.RuleType(result.Candidates[0].Rule)), log)
 	}
 
 	finishAddTracker(ctx, pool, tg, chatID, userID, lang, url, result, log)
@@ -275,12 +303,16 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 
 // finishAddTracker is the shared tail of handleAddTracker: it persists the first
 // candidate from an already-produced ExtractionResult as a new tracker. Shared between
-// the normal path (page fetched, ran through attribute-based/generic/SerpApi) and the fetch-failed
-// path (page unreachable, only SerpApi's cached rich snippet was available).
+// the normal path (page fetched, ran through attribute-based/generic/search fallback)
+// and the fetch-failed path.
 func finishAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, result *extractor.ExtractionResult, log zerolog.Logger) {
 	candidate := result.Candidates[0]
-	newPrice := 0.0
-	fmt.Sscanf(candidate.Price, "%f", &newPrice)
+	newPrice, _, ok := parsePriceInput(candidate.Price)
+	if !ok {
+		recordExtractionFailure(ctx, pool, userID, url, "failed to parse fallback price: "+candidate.Price, log)
+		SendTelegramMessage(tg, chatID, tr(lang, "tracker_create_failed"))
+		return
+	}
 
 	var trackerID string
 	err := pool.QueryRow(ctx, `
@@ -296,9 +328,9 @@ func finishAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 
 	// Save initial price point
 	pool.Exec(ctx, `
-		INSERT INTO price_points (id, tracker_id, price, currency, source, status)
-		VALUES (gen_random_uuid(), $1, $2, $3, 'bot_add', 'success')
-	`, trackerID, newPrice, candidate.Currency)
+		INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method)
+		VALUES (gen_random_uuid(), $1, $2, $3, 'bot_add', 'success', $4)
+	`, trackerID, newPrice, candidate.Currency, extractor.RuleType(candidate.Rule))
 
 	pool.Exec(ctx, `
 		INSERT INTO stock_points (id, tracker_id, stock_status, source, status)
@@ -312,13 +344,24 @@ func finishAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 	SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "tracker_created_auto"), title, formatMoney(newPrice), result.StockStatus, trackerID[:8]))
 }
 
-func handleDeleteTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, trackerID string, log zerolog.Logger) {
+// deleteTrackerRow deletes the tracker row and reports whether one was actually found
+// and removed, so callers can distinguish "deleted" from "nothing matched" without
+// duplicating the query.
+func deleteTrackerRow(ctx context.Context, pool *pgxpool.Pool, userID, trackerID string) (bool, error) {
 	tag, err := pool.Exec(ctx, `DELETE FROM trackers WHERE id::text LIKE $1 || '%' AND user_id = $2`, trackerID, userID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func handleDeleteTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, trackerID string, log zerolog.Logger) {
+	found, err := deleteTrackerRow(ctx, pool, userID, trackerID)
 	if err != nil {
 		SendTelegramMessage(tg, chatID, tr(lang, "tracker_delete_failed"))
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	if !found {
 		SendTelegramMessage(tg, chatID, tr(lang, "tracker_not_found"))
 		return
 	}
@@ -337,14 +380,15 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	body, err := fetcher.Fetch(url)
 	if err != nil {
 		if trackingMode != "stock" {
-			if serp := extractor.NewSerpAPI(); serp != nil {
+			if fallback := extractor.NewSearchFallback(); fallback != nil {
 				notifyStillSearching(tg, chatID, 0, lang)
-				if result, serpErr := serp.Extract(nil, url); serpErr == nil && len(result.Candidates) > 0 {
+				if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
 					finishCheckTracker(ctx, pool, tg, chatID, lang, trackerID, currency, result)
 					return
 				}
 			}
 		}
+		recordManualCheckFailure(ctx, pool, trackerID, err.Error(), log)
 		SendTelegramMessage(tg, chatID, tr(lang, "page_load_failed"))
 		return
 	}
@@ -364,12 +408,13 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 		result, err = generic.Extract(body, url)
 	}
 	if err != nil || len(result.Candidates) == 0 {
-		if serp := extractor.NewSerpAPI(); serp != nil {
+		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, 0, lang)
-			result, err = serp.Extract(body, url)
+			result, err = fallback.Extract(body, url)
 		}
 	}
 	if err != nil || len(result.Candidates) == 0 {
+		recordManualCheckFailure(ctx, pool, trackerID, "no price candidate found", log)
 		SendTelegramMessage(tg, chatID, tr(lang, "extract_failed"))
 		return
 	}
@@ -377,16 +422,35 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	finishCheckTracker(ctx, pool, tg, chatID, lang, trackerID, currency, result)
 }
 
+// recordManualCheckFailure persists a failed manual /check to the tracker itself (it
+// already exists, unlike the add-tracker flow), so it shows up the same way an
+// automatic worker check failure would — via trackers.last_error.
+func recordManualCheckFailure(ctx context.Context, pool *pgxpool.Pool, trackerID, errMsg string, log zerolog.Logger) {
+	if _, err := pool.Exec(ctx, `
+		UPDATE trackers SET
+			last_error = $2,
+			last_checked_at = now(),
+			consecutive_errors = consecutive_errors + 1,
+			updated_at = now()
+		WHERE id::text LIKE $1 || '%'
+	`, trackerID, errMsg); err != nil {
+		log.Error().Err(err).Str("tracker_id", trackerID).Msg("failed to record manual check failure")
+	}
+}
+
 // finishCheckTracker is the shared tail of handleCheckTracker: it persists the first
 // candidate from an already-produced ExtractionResult as the tracker's latest reading.
 // Shared between the normal path (page fetched) and the fetch-failed path (page
-// unreachable, only SerpApi's cached rich snippet was available).
+// unreachable, only the search fallback was available).
 func finishCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, lang, trackerID, fallbackCurrency string, result *extractor.ExtractionResult) {
 	candidate := result.Candidates[0]
-	newPrice := 0.0
-	fmt.Sscanf(candidate.Price, "%f", &newPrice)
+	newPrice, _, ok := parsePriceInput(candidate.Price)
+	if !ok {
+		SendTelegramMessage(tg, chatID, tr(lang, "extract_failed"))
+		return
+	}
 
-	pool.Exec(ctx, `INSERT INTO price_points (id, tracker_id, price, currency, source, status) VALUES (gen_random_uuid(), $1, $2, $3, 'manual_check', 'success')`, trackerID, newPrice, candidate.Currency)
+	pool.Exec(ctx, `INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method) VALUES (gen_random_uuid(), $1, $2, $3, 'manual_check', 'success', $4)`, trackerID, newPrice, candidate.Currency, extractor.RuleType(candidate.Rule))
 	pool.Exec(ctx, `INSERT INTO stock_points (id, tracker_id, stock_status, source, status) VALUES (gen_random_uuid(), $1, $2, 'manual_check', 'success')`, trackerID, result.StockStatus)
 	nextCurrency := candidate.Currency
 	if nextCurrency == "" {
