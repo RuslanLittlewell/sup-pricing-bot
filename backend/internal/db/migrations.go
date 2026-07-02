@@ -66,6 +66,16 @@ var Migrations = []Migration{
 		Description: "add basic plan, align plan limits, add Tribute subscription tracking",
 		SQL:         migrationV10,
 	},
+	{
+		Version:     11,
+		Description: "track which extraction method resolved each price point",
+		SQL:         migrationV11,
+	},
+	{
+		Version:     12,
+		Description: "log price extraction failures that happen before a tracker exists",
+		SQL:         migrationV12,
+	},
 }
 
 const migrationV1 = `
@@ -362,6 +372,34 @@ CREATE TABLE IF NOT EXISTS tribute_webhook_events (
     received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (event_name, subscription_id, event_created_at)
 );
+`
+
+const migrationV11 = `
+-- Which extraction method resolved this price point (e.g. "json_ld", "dom_attribute",
+-- "microdata", "css_text", "serpapi_rich_snippet", "serper_organic_result",
+-- "serper_shopping_result", "openserp_search_result"), so the admin dashboard can count
+-- how often checks fall through to the paid/token-based search fallback tiers instead of
+-- reading the page directly. NULL for failed checks and for older rows recorded before
+-- this column existed.
+ALTER TABLE price_points ADD COLUMN IF NOT EXISTS extraction_method TEXT;
+`
+
+const migrationV12 = `
+-- Records a price search that failed before any tracker row existed to attach the
+-- failure to — e.g. the interactive "send a link, then a price" bot flow, or /add,
+-- when every extractor (direct read + search fallback) comes up empty. Without this,
+-- such failures were invisible: trackers.last_error only exists once a tracker has
+-- actually been created, so a search that never got that far left no trace anywhere,
+-- including in the admin dashboard.
+CREATE TABLE IF NOT EXISTS extraction_failures (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    error TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_extraction_failures_user_id ON extraction_failures(user_id);
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {

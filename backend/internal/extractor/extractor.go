@@ -25,6 +25,22 @@ type Extractor interface {
 	Domain() string
 }
 
+// RuleType pulls the "type" field out of a PriceCandidate's Rule (e.g. "json_ld",
+// "dom_attribute", "serpapi_rich_snippet"), for logging which extraction method resolved
+// a given price. Returns "" if rule is empty or has no type field.
+func RuleType(rule json.RawMessage) string {
+	if len(rule) == 0 {
+		return ""
+	}
+	var parsed struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(rule, &parsed); err != nil {
+		return ""
+	}
+	return parsed.Type
+}
+
 type jsonLDProduct struct {
 	Name   string `json:"name"`
 	Image  string `json:"image"`

@@ -122,6 +122,15 @@ func main() {
 
 		// Tribute webhook — authenticated via trbt-signature header, not session auth
 		r.Post("/tribute/webhook", handler.TributeWebhook(pool, cfg, log))
+
+		// Local admin dashboard (admin/) — reachable remotely without an SSH tunnel,
+		// authenticated via HTTP Basic Auth instead of a session cookie.
+		r.Route("/admin", func(r chi.Router) {
+			r.Use(handler.AdminCors())
+			r.Use(handler.AdminAuth(cfg.AdminUsername, cfg.AdminPassword))
+			r.Get("/users", handler.AdminUsers(pool, log))
+			r.Get("/trackers", handler.AdminTrackers(pool, log))
+		})
 	})
 
 	srv := &http.Server{

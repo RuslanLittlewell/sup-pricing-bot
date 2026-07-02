@@ -305,6 +305,12 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		if index == 0 && sendTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, currency, log, fetcher, statusMsgID) {
 			return
 		}
+		// Only log once we've actually given up (index == 0, the only attempt for
+		// "access denied"/"price not found"; the last retry for "no more
+		// candidates") — not on every intermediate retry for the same URL.
+		if index == 0 {
+			recordExtractionFailure(ctx, pool, userID, url, err.Error(), log)
+		}
 		errText := strings.ToLower(err.Error())
 		if strings.Contains(errText, "access denied") || strings.Contains(errText, "permission to access") {
 			SendTelegramMessage(tg, chatID, tr(lang, "access_denied"))

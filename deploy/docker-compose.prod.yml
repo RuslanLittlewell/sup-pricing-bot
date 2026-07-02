@@ -53,6 +53,8 @@ services:
       SERPER_API_KEY: ${SERPER_API_KEY:-}
       SERPAPI_KEY: ${SERPAPI_KEY:-}
       SERPAPI_KEY_2: ${SERPAPI_KEY_2:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     volumes:
       - ./secrets/scraper-cookies.json:/run/secrets/scraper-cookies.json:ro
     ports:

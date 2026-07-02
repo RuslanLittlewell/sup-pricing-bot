@@ -198,7 +198,7 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 
 	log.Info().Str("tracker_id", id).Str("url", url).Msg("checking tracker")
 
-	newPrice, newCurrency, stockStatus, err := extractTrackerPrice(ctx, rend, fetcher, attr, generic, searchFallback, url, extractionRuleJSON, currency, currentPrice)
+	newPrice, newCurrency, stockStatus, extractionMethod, err := extractTrackerPrice(ctx, rend, fetcher, attr, generic, searchFallback, url, extractionRuleJSON, currency, currentPrice)
 	if err != nil {
 		log.Error().Err(err).Str("tracker_id", id).Msg("extraction failed")
 		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
@@ -206,9 +206,9 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 	}
 
 	pool.Exec(ctx, `
-		INSERT INTO price_points (id, tracker_id, price, currency, source, status)
-		VALUES (gen_random_uuid(), $1, $2, $3, 'worker_check', 'success')
-	`, id, newPrice, newCurrency)
+		INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method)
+		VALUES (gen_random_uuid(), $1, $2, $3, 'worker_check', 'success', $4)
+	`, id, newPrice, newCurrency, extractionMethod)
 
 	pool.Exec(ctx, `
 		INSERT INTO stock_points (id, tracker_id, stock_status, source, status)
@@ -270,7 +270,7 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 
 func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
 	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, searchFallback extractor.Extractor,
-	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, error) {
+	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, string, error) {
 
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
 		var rule struct {
@@ -281,13 +281,13 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 		if err := json.Unmarshal(extractionRuleJSON, &rule); err == nil && rule.Type == "css_text" && rule.Selector != "" {
 			text, err := rend.TextBySelector(ctx, url, rule.Selector)
 			if err != nil {
-				return 0, "", "", fmt.Errorf("rule extraction failed: %w", err)
+				return 0, "", "", "", fmt.Errorf("rule extraction failed: %w", err)
 			}
 			price, ok := parsePriceFromTextAtIndex(text, rule.PriceTokenIndex, referencePrice)
 			if !ok {
-				return 0, "", "", fmt.Errorf("failed to parse price from selected block")
+				return 0, "", "", "", fmt.Errorf("failed to parse price from selected block")
 			}
-			return price, fallbackCurrency, "unknown", nil
+			return price, fallbackCurrency, "unknown", "css_text", nil
 		}
 	}
 
@@ -301,7 +301,7 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 				return finalizePriceResult(result, fallbackCurrency)
 			}
 		}
-		return 0, "", "", fmt.Errorf("fetch failed: %w", err)
+		return 0, "", "", "", fmt.Errorf("fetch failed: %w", err)
 	}
 
 	result, err := attr.Extract(body, url)
@@ -313,17 +313,17 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 	}
 
 	if err != nil || len(result.Candidates) == 0 {
-		return 0, "", "", fmt.Errorf("extraction failed")
+		return 0, "", "", "", fmt.Errorf("extraction failed")
 	}
 
 	return finalizePriceResult(result, fallbackCurrency)
 }
 
-func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency string) (float64, string, string, error) {
+func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency string) (float64, string, string, string, error) {
 	candidate := result.Candidates[0]
 	newPrice, ok := parsePriceFromText(candidate.Price)
 	if !ok {
-		return 0, "", "", fmt.Errorf("failed to parse price")
+		return 0, "", "", "", fmt.Errorf("failed to parse price")
 	}
 
 	currency := candidate.Currency
@@ -334,7 +334,7 @@ func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency st
 	if stockStatus == "" {
 		stockStatus = "unknown"
 	}
-	return newPrice, currency, stockStatus, nil
+	return newPrice, currency, stockStatus, extractor.RuleType(candidate.Rule), nil
 }
 
 func handleExtractionError(ctx context.Context, pool *pgxpool.Pool, id, errMsg string, consecutiveErrors int, checkInterval int, log zerolog.Logger) {
