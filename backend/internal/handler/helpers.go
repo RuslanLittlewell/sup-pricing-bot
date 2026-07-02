@@ -5,6 +5,5 @@ import (
 )
 
 func SendTelegramMessage(tg *telegram.Client, chatID int64, text string) {
-	if err := tg.SendMessage(chatID, text); err != nil {
-	}
+	_ = tg.SendMessage(chatID, text)
 }

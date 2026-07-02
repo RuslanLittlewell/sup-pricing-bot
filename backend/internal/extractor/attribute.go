@@ -7,20 +7,23 @@ import (
 	"golang.org/x/net/html"
 )
 
-type ZaraExtractor struct{}
+// AttributeExtractor reads price and stock status off common HTML attribute and class
+// patterns (data-price, itemprop, "*price*"/"*stock*" class names) that many storefronts
+// use regardless of platform. It runs before GenericExtractor's own CSS-selector
+// fallback because these signals tend to be more precise (an explicit data-price
+// attribute is less ambiguous than a class name substring match).
+type AttributeExtractor struct{}
 
-func NewZara() *ZaraExtractor {
-	return &ZaraExtractor{}
+func NewAttribute() *AttributeExtractor {
+	return &AttributeExtractor{}
 }
 
-func (e *ZaraExtractor) Domain() string { return "zara.com" }
+func (e *AttributeExtractor) Domain() string { return "*" }
 
-func (e *ZaraExtractor) Extract(htmlContent []byte, url string) (*ExtractionResult, error) {
+func (e *AttributeExtractor) Extract(htmlContent []byte, url string) (*ExtractionResult, error) {
 	result := &ExtractionResult{
 		Candidates: []PriceCandidate{},
 	}
-
-	isZara := strings.Contains(url, "zara.com")
 
 	doc, err := html.Parse(strings.NewReader(string(htmlContent)))
 	if err != nil {
@@ -58,25 +61,22 @@ func (e *ZaraExtractor) Extract(htmlContent []byte, url string) (*ExtractionResu
 		result.ImageURL = metaImage
 	}
 
-	// 3. Zara-specific extraction (only for Zara URLs)
-	if isZara {
-		zaraPrice, zaraCurrency := extractZaraPrice(doc)
-		if zaraPrice != "" {
-			rule, _ := json.Marshal(map[string]string{"type": "zara_selector", "selector": ".product-detail-price"})
-			result.Candidates = append(result.Candidates, PriceCandidate{
-				Price:      zaraPrice,
-				Currency:   zaraCurrency,
-				Confidence: 0.8,
-				Label:      "Zara price element",
-				Rule:       rule,
-			})
-		}
+	// 3. Attribute/class-based extraction (data-price, itemprop, "*price*" class names)
+	attrPrice, attrCurrency := extractPriceByAttributes(doc)
+	if attrPrice != "" {
+		rule, _ := json.Marshal(map[string]string{"type": "dom_attribute"})
+		result.Candidates = append(result.Candidates, PriceCandidate{
+			Price:      attrPrice,
+			Currency:   attrCurrency,
+			Confidence: 0.8,
+			Label:      "DOM attribute price",
+			Rule:       rule,
+		})
+	}
 
-		if result.StockStatus == "unknown" || result.StockStatus == "" {
-			zaraStock := extractZaraStock(doc)
-			if zaraStock != "" {
-				result.StockStatus = zaraStock
-			}
+	if result.StockStatus == "unknown" || result.StockStatus == "" {
+		if attrStock := extractStockByAttributes(doc); attrStock != "" {
+			result.StockStatus = attrStock
 		}
 	}
 
@@ -111,7 +111,7 @@ func (e *ZaraExtractor) Extract(htmlContent []byte, url string) (*ExtractionResu
 	return result, nil
 }
 
-func extractZaraPrice(n *html.Node) (price, currency string) {
+func extractPriceByAttributes(n *html.Node) (price, currency string) {
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
 		if n.Type == html.ElementNode {
@@ -148,7 +148,7 @@ func extractZaraPrice(n *html.Node) (price, currency string) {
 	return
 }
 
-func extractZaraStock(n *html.Node) string {
+func extractStockByAttributes(n *html.Node) string {
 	var result string
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {

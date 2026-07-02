@@ -57,15 +57,15 @@ func main() {
 	defer notifTicker.Stop()
 
 	fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
-	zaraExtractor := extractor.NewZara()
+	attributeExtractor := extractor.NewAttribute()
 	genericExtractor := extractor.NewGeneric()
-	llmExtractor := extractor.NewLLM()
-	if llmExtractor == nil {
-		log.Warn().Msg("GROQ_API_KEY not set — LLM extraction fallback disabled")
+	serpExtractor := extractor.NewSerpAPI()
+	if serpExtractor == nil {
+		log.Warn().Msg("SERPAPI_KEY not set — SerpApi fallback disabled")
 	}
 
 	checkTrackers := func() {
-		processTrackers(ctx, pool, rend, fetcher, zaraExtractor, genericExtractor, llmExtractor, log)
+		processTrackers(ctx, pool, rend, fetcher, attributeExtractor, genericExtractor, serpExtractor, log)
 	}
 
 	sendNotifications := func() {
@@ -89,7 +89,7 @@ func main() {
 }
 
 func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
-	zara *extractor.ZaraExtractor, generic *extractor.GenericExtractor, llm *extractor.LLMExtractor, log zerolog.Logger) {
+	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, serp *extractor.SerpAPIExtractor, log zerolog.Logger) {
 
 	rows, err := pool.Query(ctx, `
 		SELECT id, url, extraction_rule, currency, current_price, current_stock_status,
@@ -126,7 +126,7 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 			processStockTracker(ctx, pool, fetcher, id, url, consecutiveErrors, checkInterval, log)
 			continue
 		}
-		processTracker(ctx, pool, rend, fetcher, zara, generic, llm, id, url, extractionRuleJSON, currency, currentPrice, consecutiveErrors, checkInterval, log)
+		processTracker(ctx, pool, rend, fetcher, attr, generic, serp, id, url, extractionRuleJSON, currency, currentPrice, consecutiveErrors, checkInterval, log)
 	}
 }
 
@@ -185,7 +185,7 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 }
 
 func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
-	zara *extractor.ZaraExtractor, generic *extractor.GenericExtractor, llm *extractor.LLMExtractor,
+	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, serp *extractor.SerpAPIExtractor,
 	id, url string, extractionRuleJSON []byte, currency string, currentPrice *float64,
 	consecutiveErrors int, checkInterval int, log zerolog.Logger) {
 	if checkInterval <= 0 {
@@ -194,7 +194,7 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 
 	log.Info().Str("tracker_id", id).Str("url", url).Msg("checking tracker")
 
-	newPrice, newCurrency, stockStatus, err := extractTrackerPrice(ctx, rend, fetcher, zara, generic, llm, url, extractionRuleJSON, currency, currentPrice)
+	newPrice, newCurrency, stockStatus, err := extractTrackerPrice(ctx, rend, fetcher, attr, generic, serp, url, extractionRuleJSON, currency, currentPrice)
 	if err != nil {
 		log.Error().Err(err).Str("tracker_id", id).Msg("extraction failed")
 		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
@@ -255,7 +255,7 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 }
 
 func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
-	zara *extractor.ZaraExtractor, generic *extractor.GenericExtractor, llm *extractor.LLMExtractor,
+	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, serp *extractor.SerpAPIExtractor,
 	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, error) {
 
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
@@ -279,21 +279,34 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 
 	body, err := fetcher.Fetch(url)
 	if err != nil {
+		// The page itself is unreachable (bot-blocked, timed out, ...), so no
+		// HTML-based extractor can help. SerpApi is the one tier that doesn't need the
+		// page at all — it reads the price off Google's own cached rich snippet for
+		// this URL — so it's the only thing left worth trying here.
+		if serp != nil {
+			if result, serpErr := serp.Extract(nil, url); serpErr == nil && len(result.Candidates) > 0 {
+				return finalizePriceResult(result, fallbackCurrency)
+			}
+		}
 		return 0, "", "", fmt.Errorf("fetch failed: %w", err)
 	}
 
-	result, err := zara.Extract(body, url)
+	result, err := attr.Extract(body, url)
 	if err != nil || len(result.Candidates) == 0 {
 		result, err = generic.Extract(body, url)
 	}
-	if (err != nil || len(result.Candidates) == 0) && llm != nil {
-		result, err = llm.Extract(body, url)
+	if (err != nil || len(result.Candidates) == 0) && serp != nil {
+		result, err = serp.Extract(body, url)
 	}
 
 	if err != nil || len(result.Candidates) == 0 {
 		return 0, "", "", fmt.Errorf("extraction failed")
 	}
 
+	return finalizePriceResult(result, fallbackCurrency)
+}
+
+func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency string) (float64, string, string, error) {
 	candidate := result.Candidates[0]
 	newPrice, ok := parsePriceFromText(candidate.Price)
 	if !ok {
