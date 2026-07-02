@@ -62,7 +62,7 @@ func main() {
 	genericExtractor := extractor.NewGeneric()
 	searchFallback := extractor.NewSearchFallback()
 	if searchFallback == nil {
-		log.Warn().Msg("search fallback disabled: set OPEN_SERP_BASE_URL or SERPAPI_KEY")
+		log.Warn().Msg("search fallback disabled: set OPEN_SERP_BASE_URL, SERPER_API_KEY, or SERPAPI_KEY")
 	} else {
 		log.Info().Str("fallback", searchFallback.Domain()).Msg("search fallback enabled")
 	}
@@ -272,6 +272,21 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, searchFallback extractor.Extractor,
 	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, string, error) {
 
+	ruleType := extractor.RuleType(extractionRuleJSON)
+	if isSearchFallbackRuleType(ruleType) {
+		if searchFallback == nil {
+			return 0, "", "", "", fmt.Errorf("search fallback disabled for %s tracker", ruleType)
+		}
+		result, err := searchFallback.Extract(nil, url)
+		if err != nil {
+			return 0, "", "", "", fmt.Errorf("search fallback extraction failed: %w", err)
+		}
+		if result == nil || len(result.Candidates) == 0 {
+			return 0, "", "", "", fmt.Errorf("search fallback did not find an exact URL price")
+		}
+		return finalizePriceResult(result, fallbackCurrency)
+	}
+
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
 		var rule struct {
 			Type            string `json:"type"`
@@ -317,6 +332,15 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 	}
 
 	return finalizePriceResult(result, fallbackCurrency)
+}
+
+func isSearchFallbackRuleType(ruleType string) bool {
+	switch ruleType {
+	case "openserp_search_result", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet":
+		return true
+	default:
+		return false
+	}
 }
 
 func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency string) (float64, string, string, string, error) {

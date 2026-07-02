@@ -376,8 +376,8 @@ CREATE TABLE IF NOT EXISTS tribute_webhook_events (
 
 const migrationV11 = `
 -- Which extraction method resolved this price point (e.g. "json_ld", "dom_attribute",
--- "microdata", "css_text", "serpapi_rich_snippet", "serper_organic_result",
--- "serper_shopping_result", "openserp_search_result"), so the admin dashboard can count
+-- "microdata", "css_text", "openserp_search_result", "serper_organic_result",
+-- "serper_shopping_result", "serpapi_rich_snippet"), so the admin dashboard can count
 -- how often checks fall through to the paid/token-based search fallback tiers instead of
 -- reading the page directly. NULL for failed checks and for older rows recorded before
 -- this column existed.

@@ -10,6 +10,7 @@ type PriceCandidate struct {
 	Currency   string          `json:"currency"`
 	Confidence float64         `json:"confidence"`
 	Label      string          `json:"label"`
+	SourceURL  string          `json:"source_url,omitempty"`
 	Rule       json.RawMessage `json:"rule"`
 }
 

@@ -265,6 +265,9 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, 0, lang)
 			if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
+				if isSearchFallbackRule(result.Candidates[0].Rule) {
+					recordExtractionFailure(ctx, pool, userID, url, fmt.Sprintf("page fetch failed: %s; resolved by %s exact URL fallback", err.Error(), extractor.RuleType(result.Candidates[0].Rule)), log)
+				}
 				finishAddTracker(ctx, pool, tg, chatID, userID, lang, url, result, log)
 				return
 			}
@@ -291,6 +294,9 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 		SendTelegramMessage(tg, chatID, tr(lang, "extract_price_failed"))
 		return
 	}
+	if isSearchFallbackRule(result.Candidates[0].Rule) {
+		recordExtractionFailure(ctx, pool, userID, url, fmt.Sprintf("page fetched but direct extractors failed; resolved by %s exact URL fallback", extractor.RuleType(result.Candidates[0].Rule)), log)
+	}
 
 	finishAddTracker(ctx, pool, tg, chatID, userID, lang, url, result, log)
 }
@@ -301,8 +307,12 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 // and the fetch-failed path.
 func finishAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, result *extractor.ExtractionResult, log zerolog.Logger) {
 	candidate := result.Candidates[0]
-	newPrice := 0.0
-	fmt.Sscanf(candidate.Price, "%f", &newPrice)
+	newPrice, _, ok := parsePriceInput(candidate.Price)
+	if !ok {
+		recordExtractionFailure(ctx, pool, userID, url, "failed to parse fallback price: "+candidate.Price, log)
+		SendTelegramMessage(tg, chatID, tr(lang, "tracker_create_failed"))
+		return
+	}
 
 	var trackerID string
 	err := pool.QueryRow(ctx, `
@@ -434,8 +444,11 @@ func recordManualCheckFailure(ctx context.Context, pool *pgxpool.Pool, trackerID
 // unreachable, only the search fallback was available).
 func finishCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, lang, trackerID, fallbackCurrency string, result *extractor.ExtractionResult) {
 	candidate := result.Candidates[0]
-	newPrice := 0.0
-	fmt.Sscanf(candidate.Price, "%f", &newPrice)
+	newPrice, _, ok := parsePriceInput(candidate.Price)
+	if !ok {
+		SendTelegramMessage(tg, chatID, tr(lang, "extract_failed"))
+		return
+	}
 
 	pool.Exec(ctx, `INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method) VALUES (gen_random_uuid(), $1, $2, $3, 'manual_check', 'success', $4)`, trackerID, newPrice, candidate.Currency, extractor.RuleType(candidate.Rule))
 	pool.Exec(ctx, `INSERT INTO stock_points (id, tracker_id, stock_status, source, status) VALUES (gen_random_uuid(), $1, $2, 'manual_check', 'success')`, trackerID, result.StockStatus)

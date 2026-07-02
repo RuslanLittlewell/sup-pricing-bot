@@ -126,6 +126,7 @@ func parseOpenSERPResponse(body []byte, pageURL string) (*ExtractionResult, erro
 			Currency:   currency,
 			Confidence: 0.65,
 			Label:      "OpenSERP search result",
+			SourceURL:  match.URL,
 			Rule:       rule,
 		}},
 	}, nil
@@ -133,17 +134,14 @@ func parseOpenSERPResponse(body []byte, pageURL string) (*ExtractionResult, erro
 
 func bestMatchingOpenSERPResult(results []openSERPResult, pageURL string) *openSERPResult {
 	for i := range results {
-		if sameURL(results[i].URL, pageURL) {
+		if SameURL(results[i].URL, pageURL) {
 			return &results[i]
 		}
-	}
-	if len(results) > 0 {
-		return &results[0]
 	}
 	return nil
 }
 
-func sameURL(a, b string) bool {
+func SameURL(a, b string) bool {
 	pa, errA := url.Parse(a)
 	pb, errB := url.Parse(b)
 	if errA != nil || errB != nil {

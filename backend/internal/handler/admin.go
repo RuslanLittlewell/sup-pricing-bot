@@ -13,14 +13,14 @@ import (
 )
 
 // adminSearchExtractionMethods are the rule types set by the token/API-key-based search
-// fallback tiers (SerpApi, Serper, OpenSERP) — see extractor.RuleType and each
+// fallback tiers (OpenSERP, Serper, SerpAPI) — see extractor.RuleType and each
 // extractor's own "type" value. Everything else (json_ld, dom_attribute, meta_tag,
 // microdata, css_selector, css_text) came from reading the page directly, for free.
 var adminSearchExtractionMethods = []string{
-	"serpapi_rich_snippet",
+	"openserp_search_result",
 	"serper_organic_result",
 	"serper_shopping_result",
-	"openserp_search_result",
+	"serpapi_rich_snippet",
 }
 
 type adminUser struct {

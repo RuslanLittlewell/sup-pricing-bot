@@ -180,22 +180,20 @@ func parseSerpAPIResponse(body []byte, pageURL string) (*ExtractionResult, error
 			Currency:   normalizeCurrencySymbol(ext.Currency),
 			Confidence: 0.7,
 			Label:      "SerpApi rich snippet",
+			SourceURL:  match.Link,
 			Rule:       rule,
 		}},
 	}, nil
 }
 
-// bestMatchingResult prefers the organic result whose link exactly matches the URL we
-// searched for — Google usually returns the page itself as the top hit when queried with
-// its exact URL — and falls back to the first result if none match exactly.
+// bestMatchingResult only accepts the organic result whose link matches the URL we
+// searched for. Search APIs can return nearby products too, so this keeps the fallback
+// tied to the exact page the user asked us to track.
 func bestMatchingResult(results []serpAPIOrganicResult, pageURL string) *serpAPIOrganicResult {
 	for i := range results {
-		if results[i].Link == pageURL {
+		if SameURL(results[i].Link, pageURL) {
 			return &results[i]
 		}
-	}
-	if len(results) > 0 {
-		return &results[0]
 	}
 	return nil
 }

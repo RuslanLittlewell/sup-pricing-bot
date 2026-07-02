@@ -106,6 +106,7 @@ func parseSerperResponse(body []byte, pageURL string) (*ExtractionResult, error)
 					Currency:   currency,
 					Confidence: 0.7,
 					Label:      "Serper organic result",
+					SourceURL:  result.Link,
 					Rule:       rule,
 				}},
 			}, nil
@@ -122,6 +123,7 @@ func parseSerperResponse(body []byte, pageURL string) (*ExtractionResult, error)
 					Currency:   currency,
 					Confidence: 0.65,
 					Label:      "Serper shopping result",
+					SourceURL:  result.Link,
 					Rule:       rule,
 				}},
 			}, nil
@@ -133,24 +135,18 @@ func parseSerperResponse(body []byte, pageURL string) (*ExtractionResult, error)
 
 func bestMatchingSerperOrganic(results []serperOrganicResult, pageURL string) *serperOrganicResult {
 	for i := range results {
-		if sameURL(results[i].Link, pageURL) {
+		if SameURL(results[i].Link, pageURL) {
 			return &results[i]
 		}
-	}
-	if len(results) > 0 {
-		return &results[0]
 	}
 	return nil
 }
 
 func bestMatchingSerperShopping(results []serperShoppingResult, pageURL string) *serperShoppingResult {
 	for i := range results {
-		if sameURL(results[i].Link, pageURL) {
+		if SameURL(results[i].Link, pageURL) {
 			return &results[i]
 		}
-	}
-	if len(results) > 0 {
-		return &results[0]
 	}
 	return nil
 }
