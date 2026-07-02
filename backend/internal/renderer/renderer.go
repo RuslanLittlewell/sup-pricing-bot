@@ -16,9 +16,8 @@ import (
 	"github.com/chromedp/chromedp"
 
 	"github.com/littlewell/price-tracker/internal/scraper"
+	"github.com/littlewell/price-tracker/internal/useragent"
 )
-
-const browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
 const acceptLanguage = "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"
 
@@ -54,7 +53,7 @@ func New(cookiesFile, proxyURL string) (*Renderer, error) {
 		chromedp.Flag("disable-features", "VizDisplayCompositor,IsolateOrigins,site-per-process"),
 		chromedp.Flag("window-size", "1920,1080"),
 		chromedp.Flag("lang", "pl-PL"),
-		chromedp.UserAgent(browserUserAgent),
+		chromedp.UserAgent(useragent.Random().UserAgent),
 	)
 	if proxyServer != "" {
 		opts = append(opts, chromedp.ProxyServer(proxyServer))
@@ -407,15 +406,22 @@ func (r *Renderer) setupProxyAuth() chromedp.Action {
 	})
 }
 
+// setupRealBrowser picks a random browser fingerprint profile and applies it
+// consistently across every layer the page can inspect: the Sec-CH-UA* headers, the CDP
+// User-Agent/platform override, and the navigator.platform JS property. A fresh profile
+// is picked on every call (i.e. every Render/FindPriceBlock/TextBySelector invocation),
+// so successive checks of the same page don't repeat one fixed fingerprint.
 func setupRealBrowser() chromedp.Action {
+	profile := useragent.Random()
+
 	headers := network.Headers{
 		"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
 		"Accept-Language":           acceptLanguage,
 		"Cache-Control":             "no-cache",
 		"Pragma":                    "no-cache",
-		"Sec-CH-UA":                 `"Chromium";v="126", "Google Chrome";v="126", "Not-A.Brand";v="99"`,
+		"Sec-CH-UA":                 profile.SecCHUA,
 		"Sec-CH-UA-Mobile":          "?0",
-		"Sec-CH-UA-Platform":        `"Windows"`,
+		"Sec-CH-UA-Platform":        profile.SecCHUAPlatform,
 		"Sec-Fetch-Dest":            "document",
 		"Sec-Fetch-Mode":            "navigate",
 		"Sec-Fetch-Site":            "none",
@@ -426,15 +432,15 @@ func setupRealBrowser() chromedp.Action {
 	return chromedp.Tasks{
 		network.Enable(),
 		network.SetExtraHTTPHeaders(headers),
-		emulation.SetUserAgentOverride(browserUserAgent).
+		emulation.SetUserAgentOverride(profile.UserAgent).
 			WithAcceptLanguage(acceptLanguage).
-			WithPlatform("Windows"),
+			WithPlatform(profile.CDPPlatform),
 		emulation.SetLocaleOverride().WithLocale("pl-PL"),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			_, err := page.AddScriptToEvaluateOnNewDocument(`
+			script := fmt.Sprintf(`
 Object.defineProperty(navigator, "webdriver", { get: () => undefined });
 Object.defineProperty(navigator, "languages", { get: () => ["pl-PL", "pl", "en-US", "en"] });
-Object.defineProperty(navigator, "platform", { get: () => "Win32" });
+Object.defineProperty(navigator, "platform", { get: () => %q });
 Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
 window.chrome = window.chrome || { runtime: {} };
 const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
@@ -445,7 +451,8 @@ if (originalQuery) {
       : originalQuery(parameters)
   );
 }
-`).Do(ctx)
+`, profile.NavigatorPlatform)
+			_, err := page.AddScriptToEvaluateOnNewDocument(script).Do(ctx)
 			return err
 		}),
 	}

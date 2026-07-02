@@ -40,7 +40,7 @@ func mapAvailability(avail string) string {
 	if strings.Contains(a, "in stock") || strings.Contains(a, "instock") || strings.Contains(a, "https://schema.org/instock") {
 		return "in_stock"
 	}
-	if strings.Contains(a, "out of stock") || strings.Contains(a, "outofstock") || strings.Contains(a, "https://schema.org/outofstock") {
+	if strings.Contains(a, "out of stock") || strings.Contains(a, "outofstock") || strings.Contains(a, "https://schema.org/outofstock") || strings.Contains(a, "soldout") {
 		return "out_of_stock"
 	}
 	if strings.Contains(a, "limited") {

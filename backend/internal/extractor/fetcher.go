@@ -1,6 +1,7 @@
 package extractor
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -12,12 +13,22 @@ import (
 	"github.com/littlewell/price-tracker/internal/renderer"
 	"github.com/littlewell/price-tracker/internal/scraper"
 	"github.com/littlewell/price-tracker/internal/security"
+	"github.com/littlewell/price-tracker/internal/useragent"
 )
 
 const (
 	maxBodySize    = 5 * 1024 * 1024 // 5MB
 	requestTimeout = 30 * time.Second
 )
+
+// errBotBlocked means the page was reached but the response is a bot-detection block/
+// challenge page (Akamai, DataDome, Cloudflare, ...), not the real content — including
+// after falling back to the headless renderer. We deliberately don't escalate further
+// (TLS/fingerprint tricks, proxy rotation) when this happens; the site is telling us,
+// unambiguously, that it doesn't want automated access to this page. Surfacing this as
+// a distinct, honest error lets callers tell the user "this site blocks bots" instead of
+// a misleading "price not found" after silently feeding block-page HTML to the extractor.
+var errBotBlocked = errors.New("page is blocked by anti-bot protection")
 
 type PageFetcher struct {
 	httpClient *http.Client
@@ -75,16 +86,22 @@ func (f *PageFetcher) Fetch(url string) ([]byte, error) {
 		if renderErr != nil {
 			return nil, fmt.Errorf("http fetch failed: %w; renderer fallback failed: %w", err, renderErr)
 		}
+		if isBotChallenge([]byte(rendered)) {
+			return nil, errBotBlocked
+		}
 		return []byte(rendered), nil
 	}
 
 	if isBotChallenge(body) {
 		if f.renderer == nil {
-			return body, nil
+			return nil, errBotBlocked
 		}
 		rendered, err := f.renderer.Render(nil, url, 3*time.Second)
 		if err != nil {
 			return nil, fmt.Errorf("renderer fallback failed: %w", err)
+		}
+		if isBotChallenge([]byte(rendered)) {
+			return nil, errBotBlocked
 		}
 		return []byte(rendered), nil
 	}
@@ -120,14 +137,15 @@ func (f *PageFetcher) httpFetch(url string) ([]byte, error) {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+	profile := useragent.Random()
+	req.Header.Set("User-Agent", profile.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
-	req.Header.Set("Sec-CH-UA", `"Chromium";v="126", "Google Chrome";v="126", "Not-A.Brand";v="99"`)
+	req.Header.Set("Sec-CH-UA", profile.SecCHUA)
 	req.Header.Set("Sec-CH-UA-Mobile", "?0")
-	req.Header.Set("Sec-CH-UA-Platform", `"Windows"`)
+	req.Header.Set("Sec-CH-UA-Platform", profile.SecCHUAPlatform)
 	req.Header.Set("Sec-Fetch-Dest", "document")
 	req.Header.Set("Sec-Fetch-Mode", "navigate")
 	req.Header.Set("Sec-Fetch-Site", "none")
@@ -166,10 +184,17 @@ func isBotChallenge(body []byte) bool {
 		`cf-browser-verification`,
 		`challenge-platform`,
 		`Just a moment...`,
+		// Akamai edge deny — confirmed against www2.hm.com (blocks at the network/IP
+		// reputation layer, before any JS challenge; the page itself is tiny).
+		`You don't have permission to access`,
+		// DataDome challenge/block — confirmed against allegro.pl.
+		`enable JS and disable any ad blocker`,
+		`Zostałeś zablokowany`,
 	}
-	if len(s) < 500 {
-		return false
-	}
+	// Akamai's edge-deny page is only ~414 bytes. A distinctive string match is
+	// unambiguous regardless of body length, so check indicators unconditionally rather
+	// than gating on a minimum size (that floor exists only to avoid false-positiving on
+	// tiny but otherwise legitimate/empty pages, which a specific phrase match can't do).
 	for _, ind := range indicators {
 		if strings.Contains(s, ind) {
 			return true

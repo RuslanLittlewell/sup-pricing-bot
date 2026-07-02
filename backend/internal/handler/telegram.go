@@ -77,6 +77,7 @@ var botTexts = map[string]map[string]string{
 		"no_more_candidates":      "I did not find other blocks with this price. Send the link again or try another price.",
 		"save_candidate_failed":   "Could not save the found block. Please try again.",
 		"candidate_caption":       "I found this block with price %s.\nIs this the correct price?",
+		"candidate_text_caption":  "I could not capture a screenshot of the price block, but I did find a price on the page: <b>%.2f %s</b> (source: %s).\nIs this the correct price?",
 		"tracker_create_failed":   "Could not create the tracker.",
 		"tracker_created":         "✅ Tracker created!\n\n<b>%s</b>\n🔗 %s\n%s\nCheck every 3 hours.\nID: <code>%s</code>",
 		"tracker_created_auto":    "✅ Tracker created!\n\n%s\n%s\n📦 %s\nID: <code>%s</code>",
@@ -160,6 +161,7 @@ var botTexts = map[string]map[string]string{
 		"no_more_candidates":      "Других блоков с этой ценой не нашёл. Отправьте ссылку заново или другую цену.",
 		"save_candidate_failed":   "Не удалось сохранить найденный блок. Попробуйте заново.",
 		"candidate_caption":       "Нашёл этот блок с ценой %s.\nЭто правильная цена?",
+		"candidate_text_caption":  "Не смог сделать скриншот блока с ценой, но нашёл цену на странице: <b>%.2f %s</b> (источник: %s).\nЭто правильная цена?",
 		"tracker_create_failed":   "Ошибка при создании трекера.",
 		"tracker_created":         "✅ Трекер создан!\n\n<b>%s</b>\n🔗 %s\n%s\nПроверка каждые 3 часа.\nID: <code>%s</code>",
 		"tracker_created_auto":    "✅ Трекер создан!\n\n%s\n%s\n📦 %s\nID: <code>%s</code>",
@@ -243,6 +245,7 @@ var botTexts = map[string]map[string]string{
 		"no_more_candidates":      "Nie znalazłem innych bloków z tą ceną. Wyślij link ponownie albo inną cenę.",
 		"save_candidate_failed":   "Nie udało się zapisać znalezionego bloku. Spróbuj ponownie.",
 		"candidate_caption":       "Znalazłem ten blok z ceną %s.\nCzy to poprawna cena?",
+		"candidate_text_caption":  "Nie udało się zrobić zrzutu ekranu bloku z ceną, ale znalazłem cenę na stronie: <b>%.2f %s</b> (źródło: %s).\nCzy to poprawna cena?",
 		"tracker_create_failed":   "Nie udało się utworzyć trackera.",
 		"tracker_created":         "✅ Tracker utworzony!\n\n<b>%s</b>\n🔗 %s\n%s\nSprawdzanie co 3 godziny.\nID: <code>%s</code>",
 		"tracker_created_auto":    "✅ Tracker utworzony!\n\n%s\n%s\n📦 %s\nID: <code>%s</code>",
@@ -630,7 +633,8 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			sendMainMenu(tg, chatID, lang, tr(lang, "menu_stale"))
 			return
 		}
-		sendNextPriceCandidate(ctx, pool, tg, chatID, userID, lang, state.URL, state.InitialPrice, state.Currency, state.CandidateIndex+1, log, rend)
+		sendNextPriceCandidate(ctx, pool, tg, chatID, userID, lang, state.URL, state.InitialPrice, state.Currency, state.CandidateIndex+1, log, rend,
+			extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy))
 	case strings.HasPrefix(data, "tracker:delete:"):
 		trackerID := strings.TrimPrefix(data, "tracker:delete:")
 		handleDeleteTracker(ctx, pool, tg, chatID, userID, lang, trackerID, log)
@@ -874,7 +878,8 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 			Float64("price", price).
 			Str("currency", currency).
 			Msg("telegram price input accepted")
-		sendNextPriceCandidate(ctx, pool, tg, chatID, userID, lang, state.URL, price, currency, 0, log, rend)
+		sendNextPriceCandidate(ctx, pool, tg, chatID, userID, lang, state.URL, price, currency, 0, log, rend,
+			extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy))
 		return true
 	case "awaiting_confirm":
 		switch lowered {
@@ -899,7 +904,8 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 				Float64("price", state.InitialPrice).
 				Int("candidate_index", state.CandidateIndex).
 				Msg("telegram price candidate rejected")
-			sendNextPriceCandidate(ctx, pool, tg, chatID, userID, lang, state.URL, state.InitialPrice, state.Currency, state.CandidateIndex+1, log, rend)
+			sendNextPriceCandidate(ctx, pool, tg, chatID, userID, lang, state.URL, state.InitialPrice, state.Currency, state.CandidateIndex+1, log, rend,
+				extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy))
 			return true
 		default:
 			markup := makeInlineKeyboard(
@@ -923,6 +929,73 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 	return false
 }
 
+// sendTextPriceCandidate is the no-screenshot fallback for sendNextPriceCandidate: it
+// runs the same extraction cascade the worker uses (zara → generic → LLM) over a plain
+// fetch of the page, and if a price comes out, offers it to the user as text — full
+// price with currency and the source it was read from — with the usual yes/no
+// confirmation. On "yes" the tracker is created with the extractor's rule instead of a
+// css_text selector, so periodic checks re-extract the same way. Returns false if no
+// price could be extracted (the caller then reports the original failure).
+func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, fallbackCurrency string, log zerolog.Logger, fetcher *extractor.PageFetcher) bool {
+	if fetcher == nil {
+		return false
+	}
+	body, err := fetcher.Fetch(url)
+	if err != nil {
+		log.Warn().Err(err).Str("url", url).Msg("text price candidate: fetch failed")
+		return false
+	}
+
+	result, err := extractor.NewZara().Extract(body, url)
+	if err != nil || len(result.Candidates) == 0 {
+		result, err = extractor.NewGeneric().Extract(body, url)
+	}
+	if err != nil || len(result.Candidates) == 0 {
+		if llm := extractor.NewLLM(); llm != nil {
+			result, err = llm.Extract(body, url)
+		}
+	}
+	if err != nil || len(result.Candidates) == 0 {
+		return false
+	}
+
+	candidate := result.Candidates[0]
+	price, _, ok := parsePriceInput(candidate.Price)
+	if !ok {
+		return false
+	}
+	currency := candidate.Currency
+	if currency == "" {
+		currency = fallbackCurrency
+	}
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO telegram_states (telegram_id, user_id, step, url, title, initial_price, currency, candidate_index, rule)
+		VALUES ($1, $2, 'awaiting_confirm', $3, $7, $4, $5, 0, $6)
+		ON CONFLICT (telegram_id) DO UPDATE
+		SET user_id = $2, step = 'awaiting_confirm', url = $3, title = $7, initial_price = $4,
+		    currency = $5, candidate_index = 0, rule = $6, updated_at = now()
+	`, chatID, userID, url, price, currency, candidate.Rule, result.Title)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to save text price candidate state")
+		return false
+	}
+	log.Info().
+		Int64("telegram_id", chatID).
+		Str("url", url).
+		Float64("price", price).
+		Str("currency", currency).
+		Str("label", candidate.Label).
+		Msg("telegram text price candidate offered")
+
+	markup := makeInlineKeyboard(
+		[]inlineButton{button(tr(lang, "button_yes"), "candidate:yes"), button(tr(lang, "button_no"), "candidate:no")},
+		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
+	)
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "candidate_text_caption"), price, currency, candidate.Label), markup)
+	return true
+}
+
 func getTelegramState(ctx context.Context, pool *pgxpool.Pool, telegramID int64) (telegramState, bool) {
 	var state telegramState
 	err := pool.QueryRow(ctx, `
@@ -932,7 +1005,7 @@ func getTelegramState(ctx context.Context, pool *pgxpool.Pool, telegramID int64)
 	return state, err == nil
 }
 
-func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, price float64, currency string, index int, log zerolog.Logger, rend *renderer.Renderer) {
+func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, price float64, currency string, index int, log zerolog.Logger, rend *renderer.Renderer, fetcher *extractor.PageFetcher) {
 	if rend == nil {
 		SendTelegramMessage(tg, chatID, tr(lang, "search_unavailable"))
 		clearTelegramState(ctx, pool, chatID)
@@ -952,6 +1025,14 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	candidate, screenshot, err := rend.FindPriceBlock(ctx, url, formatPriceForSearch(price), index)
 	if err != nil {
 		log.Error().Err(err).Str("url", url).Float64("price", price).Int("index", index).Msg("failed to find price block")
+		// The screenshot path failed, but the extraction pipeline (JSON-LD → meta →
+		// microdata → CSS → LLM) may still read a price off the page. Offering that as a
+		// text-only candidate lets the user confirm we reached a real price source even
+		// when no visual block can be captured. Only on the first attempt: retries with
+		// index > 0 would just rediscover the same extraction result in a loop.
+		if index == 0 && sendTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, currency, log, fetcher) {
+			return
+		}
 		errText := strings.ToLower(err.Error())
 		if strings.Contains(errText, "access denied") || strings.Contains(errText, "permission to access") {
 			SendTelegramMessage(tg, chatID, tr(lang, "access_denied"))
@@ -1235,6 +1316,11 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 		result, err = generic.Extract(body, url)
 	}
 	if err != nil || len(result.Candidates) == 0 {
+		if llm := extractor.NewLLM(); llm != nil {
+			result, err = llm.Extract(body, url)
+		}
+	}
+	if err != nil || len(result.Candidates) == 0 {
 		SendTelegramMessage(tg, chatID, tr(lang, "extract_price_failed"))
 		return
 	}
@@ -1314,6 +1400,11 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	if err != nil || len(result.Candidates) == 0 {
 		generic := extractor.NewGeneric()
 		result, err = generic.Extract(body, url)
+	}
+	if err != nil || len(result.Candidates) == 0 {
+		if llm := extractor.NewLLM(); llm != nil {
+			result, err = llm.Extract(body, url)
+		}
 	}
 	if err != nil || len(result.Candidates) == 0 {
 		SendTelegramMessage(tg, chatID, tr(lang, "extract_failed"))

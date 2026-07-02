@@ -59,9 +59,13 @@ func main() {
 	fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
 	zaraExtractor := extractor.NewZara()
 	genericExtractor := extractor.NewGeneric()
+	llmExtractor := extractor.NewLLM()
+	if llmExtractor == nil {
+		log.Warn().Msg("GROQ_API_KEY not set — LLM extraction fallback disabled")
+	}
 
 	checkTrackers := func() {
-		processTrackers(ctx, pool, rend, fetcher, zaraExtractor, genericExtractor, log)
+		processTrackers(ctx, pool, rend, fetcher, zaraExtractor, genericExtractor, llmExtractor, log)
 	}
 
 	sendNotifications := func() {
@@ -85,7 +89,7 @@ func main() {
 }
 
 func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
-	zara *extractor.ZaraExtractor, generic *extractor.GenericExtractor, log zerolog.Logger) {
+	zara *extractor.ZaraExtractor, generic *extractor.GenericExtractor, llm *extractor.LLMExtractor, log zerolog.Logger) {
 
 	rows, err := pool.Query(ctx, `
 		SELECT id, url, extraction_rule, currency, current_price, current_stock_status,
@@ -122,7 +126,7 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 			processStockTracker(ctx, pool, fetcher, id, url, consecutiveErrors, checkInterval, log)
 			continue
 		}
-		processTracker(ctx, pool, rend, fetcher, zara, generic, id, url, extractionRuleJSON, currency, currentPrice, consecutiveErrors, checkInterval, log)
+		processTracker(ctx, pool, rend, fetcher, zara, generic, llm, id, url, extractionRuleJSON, currency, currentPrice, consecutiveErrors, checkInterval, log)
 	}
 }
 
@@ -181,7 +185,7 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 }
 
 func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
-	zara *extractor.ZaraExtractor, generic *extractor.GenericExtractor,
+	zara *extractor.ZaraExtractor, generic *extractor.GenericExtractor, llm *extractor.LLMExtractor,
 	id, url string, extractionRuleJSON []byte, currency string, currentPrice *float64,
 	consecutiveErrors int, checkInterval int, log zerolog.Logger) {
 	if checkInterval <= 0 {
@@ -190,7 +194,7 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 
 	log.Info().Str("tracker_id", id).Str("url", url).Msg("checking tracker")
 
-	newPrice, newCurrency, stockStatus, err := extractTrackerPrice(ctx, rend, fetcher, zara, generic, url, extractionRuleJSON, currency, currentPrice)
+	newPrice, newCurrency, stockStatus, err := extractTrackerPrice(ctx, rend, fetcher, zara, generic, llm, url, extractionRuleJSON, currency, currentPrice)
 	if err != nil {
 		log.Error().Err(err).Str("tracker_id", id).Msg("extraction failed")
 		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
@@ -251,7 +255,7 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 }
 
 func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
-	zara *extractor.ZaraExtractor, generic *extractor.GenericExtractor,
+	zara *extractor.ZaraExtractor, generic *extractor.GenericExtractor, llm *extractor.LLMExtractor,
 	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, error) {
 
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
@@ -281,6 +285,9 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 	result, err := zara.Extract(body, url)
 	if err != nil || len(result.Candidates) == 0 {
 		result, err = generic.Extract(body, url)
+	}
+	if (err != nil || len(result.Candidates) == 0) && llm != nil {
+		result, err = llm.Extract(body, url)
 	}
 
 	if err != nil || len(result.Candidates) == 0 {

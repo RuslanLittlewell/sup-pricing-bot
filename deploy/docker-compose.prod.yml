@@ -74,6 +74,7 @@ services:
       BOT_USERNAME: ${BOT_USERNAME}
       SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
       SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
     volumes:
       - ./secrets/scraper-cookies.json:/run/secrets/scraper-cookies.json:ro
     depends_on:

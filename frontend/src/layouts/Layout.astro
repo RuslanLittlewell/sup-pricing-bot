@@ -2,16 +2,45 @@
 export interface Props {
   title?: string;
   description?: string;
+  image?: string;
 }
 
 const {
   title = "Telegram Price Tracker Bot — SurPrice Bot",
   description = "Track product prices, discounts and availability across online stores. Get Telegram alerts when prices drop or products come back in stock.",
+  image = "/logo_white.png",
 } = Astro.props;
 
 import Header from "@/components/layout/Header.astro";
 import Footer from "@/components/layout/Footer.astro";
 import "../styles/globals.css";
+
+const canonicalURL = new URL(Astro.url.pathname, Astro.site);
+const absoluteImageURL = new URL(image, Astro.site);
+
+const organizationJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  name: "SurPrice Bot",
+  url: Astro.site?.toString(),
+  logo: new URL("/SPBLogo.svg", Astro.site).toString(),
+  sameAs: ["https://t.me/sur_price_bot"],
+};
+
+const softwareAppJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "SurPrice Bot",
+  applicationCategory: "UtilitiesApplication",
+  operatingSystem: "Telegram",
+  url: Astro.site?.toString(),
+  description,
+  offers: {
+    "@type": "Offer",
+    price: "0",
+    priceCurrency: "USD",
+  },
+};
 ---
 
 <!doctype html>
@@ -21,6 +50,29 @@ import "../styles/globals.css";
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title data-i18n="meta.title">{title}</title>
     <meta name="description" content={description} data-i18n-content="meta.description" />
+    <link rel="canonical" href={canonicalURL} />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonicalURL} />
+    <meta property="og:site_name" content="SurPrice Bot" />
+    <meta property="og:title" content={title} data-i18n-content="meta.title" />
+    <meta
+      property="og:description"
+      content={description}
+      data-i18n-content="meta.description"
+    />
+    <meta property="og:image" content={absoluteImageURL} />
+
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:url" content={canonicalURL} />
+    <meta name="twitter:title" content={title} data-i18n-content="meta.title" />
+    <meta
+      name="twitter:description"
+      content={description}
+      data-i18n-content="meta.description"
+    />
+    <meta name="twitter:image" content={absoluteImageURL} />
+
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
@@ -32,6 +84,8 @@ import "../styles/globals.css";
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap"
     />
+    <script type="application/ld+json" is:inline set:html={JSON.stringify(organizationJsonLd)} />
+    <script type="application/ld+json" is:inline set:html={JSON.stringify(softwareAppJsonLd)} />
   </head>
   <body>
     <Header />

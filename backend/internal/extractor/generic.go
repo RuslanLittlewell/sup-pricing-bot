@@ -64,6 +64,27 @@ func (e *GenericExtractor) Extract(htmlContent []byte, url string) (*ExtractionR
 		result.StockStatus = mapAvailability(metaAvail)
 	}
 
+	// Schema.org microdata (itemprop attributes) — a third structured-data flavor next
+	// to JSON-LD and OpenGraph meta tags. allegrolokalnie.pl, for one, marks up its offer
+	// this way and emits neither of the other two.
+	microName, microPrice, microCurrency, microAvail := extractMicrodata(doc)
+	if result.Title == "" && microName != "" {
+		result.Title = microName
+	}
+	if microPrice != "" {
+		rule, _ := json.Marshal(map[string]string{"type": "microdata", "itemprop": "price"})
+		result.Candidates = append(result.Candidates, PriceCandidate{
+			Price:      microPrice,
+			Currency:   microCurrency,
+			Confidence: 0.9,
+			Label:      "Microdata price",
+			Rule:       rule,
+		})
+	}
+	if (result.StockStatus == "" || result.StockStatus == "unknown") && microAvail != "" {
+		result.StockStatus = mapAvailability(microAvail)
+	}
+
 	if len(result.Candidates) == 0 {
 		candidates := extractPriceCandidates(doc)
 		for i := range candidates {
@@ -222,6 +243,48 @@ func extractMetaTags(n *html.Node) (title, image, price, currency, availability 
 			availability = ca
 		}
 	}
+	return
+}
+
+// extractMicrodata pulls schema.org microdata (itemprop attributes) out of the page.
+// Values live in the content attribute for meta-style tags, in href for link-style ones
+// (e.g. availability pointing at http://schema.org/SoldOut). For name, only
+// content-attribute occurrences are trusted: bare itemprop="name" elements also appear
+// on breadcrumbs and seller blocks, where the value is arbitrary visible text.
+func extractMicrodata(n *html.Node) (name, price, currency, availability string) {
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			itemprop := getAttr(n, "itemprop")
+			content := getAttr(n, "content")
+			switch itemprop {
+			case "price":
+				if price == "" && content != "" {
+					price = content
+				}
+			case "priceCurrency":
+				if currency == "" && content != "" {
+					currency = content
+				}
+			case "availability":
+				if availability == "" {
+					if content != "" {
+						availability = content
+					} else if href := getAttr(n, "href"); href != "" {
+						availability = href
+					}
+				}
+			case "name":
+				if name == "" && content != "" {
+					name = strings.TrimSpace(content)
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(n)
 	return
 }
 
