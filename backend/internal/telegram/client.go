@@ -122,6 +122,85 @@ func (c *Client) SendMessageWithMarkup(chatID int64, text string, replyMarkup js
 	return nil
 }
 
+type sentMessage struct {
+	MessageID int `json:"message_id"`
+}
+
+// SendMessageGetID sends a plain text message and returns its message_id, so a later
+// EditMessageText call can update it in place (e.g. a progress notice during a slow
+// operation) instead of sending a new message.
+func (c *Client) SendMessageGetID(chatID int64, text string) (int, error) {
+	body := SendMessageRequest{
+		ChatID:    chatID,
+		Text:      text,
+		ParseMode: "HTML",
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return 0, fmt.Errorf("marshal request: %w", err)
+	}
+
+	resp, err := c.client.Post(c.BaseURL()+"/sendMessage", "application/json", bytes.NewReader(data))
+	if err != nil {
+		return 0, fmt.Errorf("send message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var apiResp APIResponse
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		return 0, fmt.Errorf("parse response: %w", err)
+	}
+	if !apiResp.Ok {
+		return 0, fmt.Errorf("telegram api error: %s", apiResp.Description)
+	}
+
+	var sent sentMessage
+	if err := json.Unmarshal(apiResp.Result, &sent); err != nil {
+		return 0, fmt.Errorf("parse sent message: %w", err)
+	}
+	return sent.MessageID, nil
+}
+
+type editMessageTextRequest struct {
+	ChatID    int64  `json:"chat_id"`
+	MessageID int    `json:"message_id"`
+	Text      string `json:"text"`
+	ParseMode string `json:"parse_mode,omitempty"`
+}
+
+// EditMessageText updates the text of a previously sent message in place — used to turn
+// a "searching..." status message into a "this is taking a bit longer" notice without
+// putting a new message into the chat for every progress update.
+func (c *Client) EditMessageText(chatID int64, messageID int, text string) error {
+	body := editMessageTextRequest{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      text,
+		ParseMode: "HTML",
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+
+	resp, err := c.client.Post(c.BaseURL()+"/editMessageText", "application/json", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("edit message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var apiResp APIResponse
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		return fmt.Errorf("parse response: %w", err)
+	}
+	if !apiResp.Ok {
+		return fmt.Errorf("telegram api error: %s", apiResp.Description)
+	}
+	return nil
+}
+
 func (c *Client) SendPhoto(chatID int64, photo []byte, caption string) error {
 	return c.SendPhotoWithMarkup(chatID, photo, caption, nil)
 }

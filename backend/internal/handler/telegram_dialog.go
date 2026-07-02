@@ -160,14 +160,33 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 	return false
 }
 
+// notifyStillSearching lets the user know a price search is taking longer than usual.
+// SerpApi's cold-search fallback can take up to ~45s — long enough that without this
+// notice a user might think the bot stalled. It edits statusMsgID in place when one is
+// available (so we don't spam a new message for every progress update); otherwise it
+// sends a new message, since some call sites (e.g. /add, /check) never show an initial
+// status message at all.
+func notifyStillSearching(tg *telegram.Client, chatID int64, statusMsgID int, lang string) {
+	text := tr(lang, "search_more_time")
+	if statusMsgID != 0 {
+		if err := tg.EditMessageText(chatID, statusMsgID, text); err == nil {
+			return
+		}
+	}
+	SendTelegramMessage(tg, chatID, text)
+}
+
 // sendTextPriceCandidate is the no-screenshot fallback for sendNextPriceCandidate: it
 // runs the same extraction cascade the worker uses (attribute-based → generic → SerpApi) over a
 // plain fetch of the page, and if a price comes out, offers it to the user as text — full
 // price with currency and the source it was read from — with the usual yes/no
 // confirmation. On "yes" the tracker is created with the extractor's rule instead of a
 // css_text selector, so periodic checks re-extract the same way. Returns false if no
-// price could be extracted (the caller then reports the original failure).
-func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, fallbackCurrency string, log zerolog.Logger, fetcher *extractor.PageFetcher) bool {
+// price could be extracted (the caller then reports the original failure). statusMsgID,
+// when non-zero, is the id of an existing "searching..." message to update in place
+// right before the slow SerpApi call, instead of leaving the user staring at a stale
+// status with no feedback.
+func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, fallbackCurrency string, log zerolog.Logger, fetcher *extractor.PageFetcher, statusMsgID int) bool {
 	if fetcher == nil {
 		return false
 	}
@@ -175,6 +194,7 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	if err != nil {
 		log.Warn().Err(err).Str("url", url).Msg("text price candidate: fetch failed")
 		if serp := extractor.NewSerpAPI(); serp != nil {
+			notifyStillSearching(tg, chatID, statusMsgID, lang)
 			if result, serpErr := serp.Extract(nil, url); serpErr == nil && len(result.Candidates) > 0 {
 				return offerTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, fallbackCurrency, result, log)
 			}
@@ -188,6 +208,7 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	}
 	if err != nil || len(result.Candidates) == 0 {
 		if serp := extractor.NewSerpAPI(); serp != nil {
+			notifyStillSearching(tg, chatID, statusMsgID, lang)
 			result, err = serp.Extract(body, url)
 		}
 	}
@@ -237,7 +258,7 @@ func offerTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegr
 		[]inlineButton{button(tr(lang, "button_yes"), "candidate:yes"), button(tr(lang, "button_no"), "candidate:no")},
 		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
 	)
-	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "candidate_text_caption"), price, currency, candidate.Label), markup)
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "candidate_text_caption"), price, currency), markup)
 	return true
 }
 
@@ -261,7 +282,10 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		return
 	}
 
-	SendTelegramMessage(tg, chatID, tr(lang, "search_started"))
+	statusMsgID, err := tg.SendMessageGetID(chatID, tr(lang, "search_started"))
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to send search-started message")
+	}
 	log.Info().
 		Int64("telegram_id", chatID).
 		Str("user_id", userID).
@@ -279,7 +303,7 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		// text-only candidate lets the user confirm we reached a real price source even
 		// when no visual block can be captured. Only on the first attempt: retries with
 		// index > 0 would just rediscover the same extraction result in a loop.
-		if index == 0 && sendTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, currency, log, fetcher) {
+		if index == 0 && sendTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, currency, log, fetcher, statusMsgID) {
 			return
 		}
 		errText := strings.ToLower(err.Error())

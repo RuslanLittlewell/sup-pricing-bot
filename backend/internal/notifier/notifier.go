@@ -18,34 +18,37 @@ type Notifier struct {
 
 var notifierTexts = map[string]map[string]string{
 	"en": {
-		"price_changed":     "🔔 Price changed\n\nProduct: %s\nOld price: %s\nNew price: %s\n\nOpen product:\n%s",
-		"back_in_stock":     "✅ Product is back in stock\n\nProduct: %s\nPrice: %s\n\nOpen product:\n%s",
-		"out_of_stock":      "❌ Product is out of stock\n\nProduct: %s\nLast price: %s\n\nOpen product:\n%s",
-		"stock_changed":     "📦 Stock status changed\n\nProduct: %s\nBefore: %s\nNow: %s\nPrice: %s\n\nOpen product:\n%s",
-		"extraction_failed": "⚠️ Price check failed\n\nProduct: %s\nCould not extract the price. The site may have changed.\n\nOpen product:\n%s",
-		"unknown":           "unknown",
-		"stock_in":          "in stock",
-		"stock_out":         "out of stock",
+		"price_changed":       "🔔 Price changed\n\nProduct: %s\nOld price: %s\nNew price: %s\n\nOpen product:\n%s",
+		"price_changed_first": "🔔 Price changed\n\nProduct: %s\nPrice: %s\n\nOpen product:\n%s",
+		"back_in_stock":       "✅ Product is back in stock\n\nProduct: %s\nPrice: %s\n\nOpen product:\n%s",
+		"out_of_stock":        "❌ Product is out of stock\n\nProduct: %s\nLast price: %s\n\nOpen product:\n%s",
+		"stock_changed":       "📦 Stock status changed\n\nProduct: %s\nBefore: %s\nNow: %s\nPrice: %s\n\nOpen product:\n%s",
+		"extraction_failed":   "⚠️ Price check failed\n\nProduct: %s\nCould not extract the price. The site may have changed.\n\nOpen product:\n%s",
+		"unknown":             "unknown",
+		"stock_in":            "in stock",
+		"stock_out":           "out of stock",
 	},
 	"ru": {
-		"price_changed":     "🔔 Цена изменилась\n\nТовар: %s\nСтарая цена: %s\nНовая цена: %s\n\nОткрыть товар:\n%s",
-		"back_in_stock":     "✅ Товар снова в наличии\n\nТовар: %s\nЦена: %s\n\nОткрыть товар:\n%s",
-		"out_of_stock":      "❌ Товар закончился\n\nТовар: %s\nПоследняя цена: %s\n\nОткрыть товар:\n%s",
-		"stock_changed":     "📦 Статус наличия изменился\n\nТовар: %s\nБыло: %s\nСтало: %s\nЦена: %s\n\nОткрыть товар:\n%s",
-		"extraction_failed": "⚠️ Ошибка проверки цены\n\nТовар: %s\nНе удалось извлечь цену. Возможно, сайт изменился.\n\nОткрыть товар:\n%s",
-		"unknown":           "неизвестно",
-		"stock_in":          "в наличии",
-		"stock_out":         "нет в наличии",
+		"price_changed":       "🔔 Цена изменилась\n\nТовар: %s\nСтарая цена: %s\nНовая цена: %s\n\nОткрыть товар:\n%s",
+		"price_changed_first": "🔔 Цена изменилась\n\nТовар: %s\nЦена: %s\n\nОткрыть товар:\n%s",
+		"back_in_stock":       "✅ Товар снова в наличии\n\nТовар: %s\nЦена: %s\n\nОткрыть товар:\n%s",
+		"out_of_stock":        "❌ Товар закончился\n\nТовар: %s\nПоследняя цена: %s\n\nОткрыть товар:\n%s",
+		"stock_changed":       "📦 Статус наличия изменился\n\nТовар: %s\nБыло: %s\nСтало: %s\nЦена: %s\n\nОткрыть товар:\n%s",
+		"extraction_failed":   "⚠️ Ошибка проверки цены\n\nТовар: %s\nНе удалось извлечь цену. Возможно, сайт изменился.\n\nОткрыть товар:\n%s",
+		"unknown":             "неизвестно",
+		"stock_in":            "в наличии",
+		"stock_out":           "нет в наличии",
 	},
 	"pl": {
-		"price_changed":     "🔔 Cena się zmieniła\n\nProdukt: %s\nStara cena: %s\nNowa cena: %s\n\nOtwórz produkt:\n%s",
-		"back_in_stock":     "✅ Produkt znów jest dostępny\n\nProdukt: %s\nCena: %s\n\nOtwórz produkt:\n%s",
-		"out_of_stock":      "❌ Produkt jest niedostępny\n\nProdukt: %s\nOstatnia cena: %s\n\nOtwórz produkt:\n%s",
-		"stock_changed":     "📦 Status dostępności się zmienił\n\nProdukt: %s\nByło: %s\nTeraz: %s\nCena: %s\n\nOtwórz produkt:\n%s",
-		"extraction_failed": "⚠️ Błąd sprawdzania ceny\n\nProdukt: %s\nNie udało się pobrać ceny. Strona mogła się zmienić.\n\nOtwórz produkt:\n%s",
-		"unknown":           "nieznany",
-		"stock_in":          "dostępny",
-		"stock_out":         "niedostępny",
+		"price_changed":       "🔔 Cena się zmieniła\n\nProdukt: %s\nStara cena: %s\nNowa cena: %s\n\nOtwórz produkt:\n%s",
+		"price_changed_first": "🔔 Cena się zmieniła\n\nProdukt: %s\nCena: %s\n\nOtwórz produkt:\n%s",
+		"back_in_stock":       "✅ Produkt znów jest dostępny\n\nProdukt: %s\nCena: %s\n\nOtwórz produkt:\n%s",
+		"out_of_stock":        "❌ Produkt jest niedostępny\n\nProdukt: %s\nOstatnia cena: %s\n\nOtwórz produkt:\n%s",
+		"stock_changed":       "📦 Status dostępności się zmienił\n\nProdukt: %s\nByło: %s\nTeraz: %s\nCena: %s\n\nOtwórz produkt:\n%s",
+		"extraction_failed":   "⚠️ Błąd sprawdzania ceny\n\nProdukt: %s\nNie udało się pobrać ceny. Strona mogła się zmienić.\n\nOtwórz produkt:\n%s",
+		"unknown":             "nieznany",
+		"stock_in":            "dostępny",
+		"stock_out":           "niedostępny",
 	},
 }
 
@@ -142,15 +145,19 @@ func (n *Notifier) send(ctx context.Context, id, notifType string, title *string
 
 	switch notifType {
 	case "price_changed":
-		oldStr := "—"
 		newStr := "—"
-		if oldPrice != nil {
-			oldStr = formatMoney(*oldPrice)
-		}
 		if newPrice != nil {
 			newStr = formatMoney(*newPrice)
 		}
-		text = fmt.Sprintf(nt(lang, "price_changed"), displayTitle, oldStr, newStr, url)
+		// oldPrice is nil specifically for a tracker's first-ever price change (see
+		// cmd/worker/main.go's isFirstChange) — omit the "old price" line there since it
+		// would just repeat the initial_price the user already saw when adding the
+		// tracker, instead of showing genuinely new information.
+		if oldPrice == nil {
+			text = fmt.Sprintf(nt(lang, "price_changed_first"), displayTitle, newStr, url)
+		} else {
+			text = fmt.Sprintf(nt(lang, "price_changed"), displayTitle, formatMoney(*oldPrice), newStr, url)
+		}
 
 	case "back_in_stock":
 		text = fmt.Sprintf(nt(lang, "back_in_stock"), displayTitle, priceStr, url)

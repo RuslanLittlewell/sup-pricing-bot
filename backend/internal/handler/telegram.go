@@ -24,7 +24,15 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
+		// Acknowledge Telegram immediately and flush it over the wire before doing any
+		// real work. Without an explicit flush, Go may buffer the response until the
+		// handler returns — and price extraction below can take 40+ seconds (SerpApi
+		// fallback). If Telegram doesn't see the 200 in time it retries the same update,
+		// which is why a single message could otherwise be processed (and answered) twice.
 		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
 
 		if update.CallbackQuery != nil {
 			callback := update.CallbackQuery

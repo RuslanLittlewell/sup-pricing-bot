@@ -92,7 +92,7 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, serp *extractor.SerpAPIExtractor, log zerolog.Logger) {
 
 	rows, err := pool.Query(ctx, `
-		SELECT id, url, extraction_rule, currency, current_price, current_stock_status,
+		SELECT id, url, extraction_rule, currency, current_price, previous_price, current_stock_status,
 		       consecutive_errors, check_interval_minutes, tracking_mode
 		FROM trackers
 		WHERE status = 'active' AND next_check_at <= now()
@@ -113,12 +113,13 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 			extractionRuleJSON []byte
 			currency           string
 			currentPrice       *float64
+			previousPrice      *float64
 			currentStockStatus string
 			consecutiveErrors  int
 			checkInterval      int
 			trackingMode       string
 		)
-		if err := rows.Scan(&id, &url, &extractionRuleJSON, &currency, &currentPrice, &currentStockStatus, &consecutiveErrors, &checkInterval, &trackingMode); err != nil {
+		if err := rows.Scan(&id, &url, &extractionRuleJSON, &currency, &currentPrice, &previousPrice, &currentStockStatus, &consecutiveErrors, &checkInterval, &trackingMode); err != nil {
 			log.Error().Err(err).Msg("failed to scan tracker")
 			continue
 		}
@@ -126,7 +127,7 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 			processStockTracker(ctx, pool, fetcher, id, url, consecutiveErrors, checkInterval, log)
 			continue
 		}
-		processTracker(ctx, pool, rend, fetcher, attr, generic, serp, id, url, extractionRuleJSON, currency, currentPrice, consecutiveErrors, checkInterval, log)
+		processTracker(ctx, pool, rend, fetcher, attr, generic, serp, id, url, extractionRuleJSON, currency, currentPrice, previousPrice, consecutiveErrors, checkInterval, log)
 	}
 }
 
@@ -186,7 +187,7 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 
 func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
 	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, serp *extractor.SerpAPIExtractor,
-	id, url string, extractionRuleJSON []byte, currency string, currentPrice *float64,
+	id, url string, extractionRuleJSON []byte, currency string, currentPrice, previousPrice *float64,
 	consecutiveErrors int, checkInterval int, log zerolog.Logger) {
 	if checkInterval <= 0 {
 		checkInterval = 180
@@ -212,6 +213,12 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 	`, id, stockStatus)
 
 	prevPrice := currentPrice
+	// This tracker has already had at least one price change recorded (previousPrice is
+	// non-nil) only once previous_price has been set by an earlier change — i.e. this is
+	// (at least) the second change. On the very first change, previousPrice is still nil
+	// here, and "old price" would just equal initial_price the user already knows, so we
+	// omit it from the notification (see notifier.go's price_changed_first template).
+	isFirstChange := previousPrice == nil
 
 	pool.Exec(ctx, `
 		UPDATE trackers SET
@@ -228,11 +235,15 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 	`, id, newPrice, stockStatus, checkInterval)
 
 	if prevPrice != nil && *prevPrice != newPrice {
+		var oldPriceParam *float64
+		if !isFirstChange {
+			oldPriceParam = prevPrice
+		}
 		pool.Exec(ctx, `
 			INSERT INTO notifications (id, user_id, tracker_id, type, old_price, new_price, currency, status)
 			SELECT gen_random_uuid(), user_id, $1, 'price_changed', $2, $3, $4, 'pending'
 			FROM trackers WHERE id = $1
-		`, id, *prevPrice, newPrice, newCurrency)
+		`, id, oldPriceParam, newPrice, newCurrency)
 	}
 
 	var prevStockStatus string

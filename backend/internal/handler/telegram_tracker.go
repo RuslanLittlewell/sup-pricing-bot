@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"html"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -220,7 +221,7 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 			card += fmt.Sprintf("\n💰 %.2f %s", *t.price, t.currency)
 		}
 		card += fmt.Sprintf("\n⏱ %s", formatInterval(lang, t.interval))
-		card += fmt.Sprintf("\n🔗 %s", extractDomain(t.url))
+		card += fmt.Sprintf("\n🔗 <a href=\"%s\">%s</a>", html.EscapeString(t.url), extractDomain(t.url))
 		card += fmt.Sprintf("\nID: <code>%s</code>", shortID)
 
 		kbd := [][]inlineButton{
@@ -242,6 +243,7 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 	body, err := fetcher.Fetch(url)
 	if err != nil {
 		if serp := extractor.NewSerpAPI(); serp != nil {
+			notifyStillSearching(tg, chatID, 0, lang)
 			if result, serpErr := serp.Extract(nil, url); serpErr == nil && len(result.Candidates) > 0 {
 				finishAddTracker(ctx, pool, tg, chatID, userID, lang, url, result, log)
 				return
@@ -259,6 +261,7 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 	}
 	if err != nil || len(result.Candidates) == 0 {
 		if serp := extractor.NewSerpAPI(); serp != nil {
+			notifyStillSearching(tg, chatID, 0, lang)
 			result, err = serp.Extract(body, url)
 		}
 	}
@@ -335,6 +338,7 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	if err != nil {
 		if trackingMode != "stock" {
 			if serp := extractor.NewSerpAPI(); serp != nil {
+				notifyStillSearching(tg, chatID, 0, lang)
 				if result, serpErr := serp.Extract(nil, url); serpErr == nil && len(result.Candidates) > 0 {
 					finishCheckTracker(ctx, pool, tg, chatID, lang, trackerID, currency, result)
 					return
@@ -361,6 +365,7 @@ func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	}
 	if err != nil || len(result.Candidates) == 0 {
 		if serp := extractor.NewSerpAPI(); serp != nil {
+			notifyStillSearching(tg, chatID, 0, lang)
 			result, err = serp.Extract(body, url)
 		}
 	}
