@@ -14,7 +14,6 @@ import (
 	"github.com/littlewell/price-tracker/internal/config"
 	"github.com/littlewell/price-tracker/internal/extractor"
 	"github.com/littlewell/price-tracker/internal/renderer"
-	"github.com/littlewell/price-tracker/internal/shops"
 	"github.com/littlewell/price-tracker/internal/telegram"
 )
 
@@ -264,12 +263,12 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			sendMainMenu(tg, chatID, lang, tr(lang, "menu_unknown_button"))
 			return
 		}
-		var variants []shops.ZaraSizeVariant
-		if err := json.Unmarshal(state.Rule, &variants); err != nil || idx < 0 || idx >= len(variants) {
+		var selection zaraSizeSelectionState
+		if err := json.Unmarshal(state.Rule, &selection); err != nil || idx < 0 || idx >= len(selection.Variants) {
 			sendMainMenu(tg, chatID, lang, tr(lang, "menu_stale"))
 			return
 		}
-		createZaraSizeTracker(ctx, pool, tg, chatID, userID, lang, state.URL, state.Title, variants[idx], log)
+		createZaraSizeTracker(ctx, pool, tg, chatID, userID, lang, state.URL, state.Title, selection.FetchMethod, selection.Variants[idx], log)
 	case data == "candidate:yes":
 		state, ok := getTelegramState(ctx, pool, chatID)
 		if !ok || state.Step != "awaiting_confirm" {

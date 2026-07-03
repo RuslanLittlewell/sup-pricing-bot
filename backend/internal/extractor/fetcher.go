@@ -30,10 +30,21 @@ const (
 // a misleading "price not found" after silently feeding block-page HTML to the extractor.
 var errBotBlocked = errors.New("page is blocked by anti-bot protection")
 
+// Fetch method labels — which tier actually produced the page body, independent of
+// which extraction method later parses a price out of it. Recorded alongside
+// extraction_method in price_points/stock_points so the admin dashboard can show, e.g.,
+// "parsed via json_ld, fetched via cf_relay" instead of leaving fetch strategy invisible.
+const (
+	FetchMethodDirect  = "direct"
+	FetchMethodCFRelay = "cf_relay"
+	FetchMethodRender  = "render"
+)
+
 type PageFetcher struct {
 	httpClient *http.Client
 	renderer   *renderer.Renderer
 	cookies    []scraper.Cookie
+	cfRelay    *CloudflareRelayFetcher
 }
 
 func NewPageFetcher(r *renderer.Renderer, cookiesFile, proxyURL string) *PageFetcher {
@@ -62,50 +73,82 @@ func NewPageFetcher(r *renderer.Renderer, cookiesFile, proxyURL string) *PageFet
 		},
 		renderer: r,
 		cookies:  cookies,
+		cfRelay:  NewCloudflareRelay(),
 	}
 }
 
-func (f *PageFetcher) Fetch(url string) ([]byte, error) {
+// Fetch returns the page body plus which tier produced it (FetchMethodDirect/CFRelay/
+// Render) — see the constants' doc comment for why that's tracked separately from
+// extraction_method.
+func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 	if err := security.ValidateURL(url); err != nil {
-		return nil, fmt.Errorf("url validation failed: %w", err)
+		return nil, "", fmt.Errorf("url validation failed: %w", err)
 	}
 
 	if f.renderer != nil && shouldRenderFirst(url) {
 		rendered, err := f.renderer.Render(nil, url, 6*time.Second)
 		if err == nil && !isBotChallenge([]byte(rendered)) {
-			return []byte(rendered), nil
+			return []byte(rendered), FetchMethodRender, nil
 		}
 	}
 
 	body, err := f.httpFetchWithRetry(url)
 	if err != nil {
-		if f.renderer == nil || !shouldRenderFallback(err) {
-			return nil, err
+		if !shouldRenderFallback(err) {
+			return nil, "", err
+		}
+		if relayed, relayErr := f.fetchViaRelay(url); relayErr == nil {
+			return relayed, FetchMethodCFRelay, nil
+		}
+		if f.renderer == nil {
+			return nil, "", err
 		}
 		rendered, renderErr := f.renderer.Render(nil, url, 6*time.Second)
 		if renderErr != nil {
-			return nil, fmt.Errorf("http fetch failed: %w; renderer fallback failed: %w", err, renderErr)
+			return nil, "", fmt.Errorf("http fetch failed: %w; renderer fallback failed: %w", err, renderErr)
 		}
 		if isBotChallenge([]byte(rendered)) {
-			return nil, errBotBlocked
+			return nil, "", errBotBlocked
 		}
-		return []byte(rendered), nil
+		return []byte(rendered), FetchMethodRender, nil
 	}
 
 	if isBotChallenge(body) {
+		if relayed, relayErr := f.fetchViaRelay(url); relayErr == nil {
+			return relayed, FetchMethodCFRelay, nil
+		}
 		if f.renderer == nil {
-			return nil, errBotBlocked
+			return nil, "", errBotBlocked
 		}
 		rendered, err := f.renderer.Render(nil, url, 3*time.Second)
 		if err != nil {
-			return nil, fmt.Errorf("renderer fallback failed: %w", err)
+			return nil, "", fmt.Errorf("renderer fallback failed: %w", err)
 		}
 		if isBotChallenge([]byte(rendered)) {
-			return nil, errBotBlocked
+			return nil, "", errBotBlocked
 		}
-		return []byte(rendered), nil
+		return []byte(rendered), FetchMethodRender, nil
 	}
 
+	return body, FetchMethodDirect, nil
+}
+
+// fetchViaRelay tries the Cloudflare Worker relay (see cloudflare-relay/) — a different
+// network origin for a plain fetch, cheap and fast next to spinning up a headless
+// browser, so it's worth trying right after our own direct fetch gets blocked and before
+// paying for a render. Returns an error (never challenge-page bytes) when the relay isn't
+// configured, unreachable, or itself got blocked, so callers can fall through cleanly.
+func (f *PageFetcher) fetchViaRelay(url string) ([]byte, error) {
+	if f.cfRelay == nil {
+		return nil, fmt.Errorf("cloudflare relay not configured")
+	}
+	body, err := f.cfRelay.Fetch(url)
+	if err != nil {
+		return nil, err
+	}
+	if isBotChallenge(body) {
+		return nil, errBotBlocked
+	}
 	return body, nil
 }
 

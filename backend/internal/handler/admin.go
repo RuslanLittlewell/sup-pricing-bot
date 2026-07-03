@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
+
+	"github.com/littlewell/price-tracker/internal/proxypool"
 )
 
 // adminSearchExtractionMethods are the rule types set by the token/API-key-based search
@@ -46,6 +48,7 @@ type adminUserTracker struct {
 	Currency               string   `json:"currency"`
 	ExtractionMethod       string   `json:"extractionMethod"`
 	LatestExtractionMethod string   `json:"latestExtractionMethod,omitempty"`
+	LatestFetchMethod      string   `json:"latestFetchMethod,omitempty"`
 	CreatedAt              string   `json:"createdAt"`
 	LastCheckedAt          *string  `json:"lastCheckedAt"`
 	ConsecutiveErrors      int      `json:"consecutiveErrors"`
@@ -199,6 +202,15 @@ func AdminUserTrackers(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc 
 			           WHERE sp.tracker_id = t.id
 			           ORDER BY sp.checked_at DESC LIMIT 1
 			       ), ''),
+			       COALESCE((
+			           SELECT pp.fetch_method FROM price_points pp
+			           WHERE pp.tracker_id = t.id AND pp.fetch_method IS NOT NULL
+			           ORDER BY pp.checked_at DESC LIMIT 1
+			       ), (
+			           SELECT sp.fetch_method FROM stock_points sp
+			           WHERE sp.tracker_id = t.id AND sp.fetch_method IS NOT NULL
+			           ORDER BY sp.checked_at DESC LIMIT 1
+			       ), ''),
 			       t.created_at::text, t.last_checked_at::text, t.consecutive_errors, t.last_error
 			FROM trackers t
 			WHERE t.user_id = $1 AND t.status != 'deleted'
@@ -219,16 +231,18 @@ func AdminUserTrackers(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc 
 				lastCheckedAt     *string
 				latestPriceMethod string
 				latestStockMethod string
+				latestFetchMethod string
 			)
 			if err := rows.Scan(&t.ID, &t.Title, &t.URL, &t.Domain, &t.Status,
 				&t.InitialPrice, &t.CurrentPrice, &t.Currency, &trackingMode,
-				&t.ExtractionMethod, &latestPriceMethod, &latestStockMethod,
+				&t.ExtractionMethod, &latestPriceMethod, &latestStockMethod, &latestFetchMethod,
 				&t.CreatedAt, &lastCheckedAt, &t.ConsecutiveErrors, &t.LastError); err != nil {
 				log.Error().Err(err).Msg("failed to scan admin user tracker row")
 				http.Error(w, `{"error":"failed to load data"}`, http.StatusInternalServerError)
 				return
 			}
 			t.LastCheckedAt = lastCheckedAt
+			t.LatestFetchMethod = latestFetchMethod
 			if trackingMode == "stock" {
 				// Stock trackers don't all set extraction_rule (only the size-specific ones
 				// do; a plain whole-item tracker has none) — the latest recorded check is the
@@ -249,6 +263,68 @@ func AdminUserTrackers(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(trackers); err != nil {
 			log.Error().Err(err).Msg("failed to encode admin user trackers response")
+		}
+	}
+}
+
+type adminProxy struct {
+	ID            string  `json:"id"`
+	Address       string  `json:"address"`
+	Protocol      string  `json:"protocol"`
+	CountryCode   string  `json:"countryCode"`
+	Status        string  `json:"status"`
+	Source        string  `json:"source"`
+	HasAuth       bool    `json:"hasAuth"`
+	UseCount      int     `json:"useCount"`
+	LastCheckedAt *string `json:"lastCheckedAt"`
+	LastUsedAt    *string `json:"lastUsedAt"`
+	CreatedAt     string  `json:"createdAt"`
+}
+
+// AdminProxies serves the proxy pool page: every proxy in the pool (see
+// internal/proxypool), its last-known aliveness, and how many times it's actually been
+// handed out for use — so it's visible whether the pool is healthy (enough "alive"
+// entries) before anything is wired to actually draw from it for scraping.
+func AdminProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
+	store := proxypool.NewStore(pool)
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+
+		proxies, err := store.List(ctx)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to query admin proxies")
+			http.Error(w, `{"error":"failed to load data"}`, http.StatusInternalServerError)
+			return
+		}
+
+		result := make([]adminProxy, 0, len(proxies))
+		for _, p := range proxies {
+			out := adminProxy{
+				ID:          p.ID,
+				Address:     p.Address,
+				Protocol:    p.Protocol,
+				CountryCode: p.CountryCode,
+				Status:      p.Status,
+				Source:      p.Source,
+				HasAuth:     p.HasAuth,
+				UseCount:    p.UseCount,
+				CreatedAt:   p.CreatedAt.Format(time.RFC3339),
+			}
+			if p.LastCheckedAt != nil {
+				s := p.LastCheckedAt.Format(time.RFC3339)
+				out.LastCheckedAt = &s
+			}
+			if p.LastUsedAt != nil {
+				s := p.LastUsedAt.Format(time.RFC3339)
+				out.LastUsedAt = &s
+			}
+			result = append(result, out)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			log.Error().Err(err).Msg("failed to encode admin proxies response")
 		}
 	}
 }

@@ -17,6 +17,7 @@ export interface UserTracker {
   currency: string
   extractionMethod: string
   latestExtractionMethod?: string
+  latestFetchMethod?: string
   createdAt: string
   lastCheckedAt: string | null
   consecutiveErrors: number
@@ -47,6 +48,20 @@ export interface TrackersResponse {
   fallbackTrackers: FallbackTracker[]
   failedTrackers: FailedTracker[]
   generatedAt: string
+}
+
+export interface AdminProxy {
+  id: string
+  address: string
+  protocol: string
+  countryCode: string
+  status: string
+  source: string
+  hasAuth: boolean
+  useCount: number
+  lastCheckedAt: string | null
+  lastUsedAt: string | null
+  createdAt: string
 }
 
 // The deployed API (backend/cmd/api) — the /api/admin/* routes are reachable directly
@@ -123,6 +138,10 @@ export function fetchTrackers(creds: Credentials): Promise<TrackersResponse> {
 
 export function fetchUserTrackers(creds: Credentials, userId: string): Promise<UserTracker[]> {
   return adminGet(`/api/admin/users/${encodeURIComponent(userId)}/trackers`, creds)
+}
+
+export function fetchProxies(creds: Credentials): Promise<AdminProxy[]> {
+  return adminGet('/api/admin/proxies', creds)
 }
 
 export function deleteFailedTracker(
