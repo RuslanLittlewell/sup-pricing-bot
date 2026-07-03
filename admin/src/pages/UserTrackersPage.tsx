@@ -17,6 +17,7 @@ import {
 // paid search fallback tier. Mirrors adminSearchExtractionMethods in backend/internal/handler/admin.go.
 const SEARCH_FALLBACK_METHODS = new Set([
   'openserp_search_result',
+  'openserp_extract',
   'serper_organic_result',
   'serper_shopping_result',
   'serpapi_rich_snippet',

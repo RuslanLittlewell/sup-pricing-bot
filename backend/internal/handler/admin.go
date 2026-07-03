@@ -21,6 +21,7 @@ import (
 // microdata, css_selector, css_text) came from reading the page directly, for free.
 var adminSearchExtractionMethods = []string{
 	"openserp_search_result",
+	"openserp_extract",
 	"serper_organic_result",
 	"serper_shopping_result",
 	"serpapi_rich_snippet",
