@@ -43,11 +43,15 @@ func enforceTrackerLimit(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 		return true
 	}
 	if count >= limits.maxTrackers {
-		markup := makeInlineKeyboard(
+		var rows [][]inlineButton
+		if limits.code == "free" && !hasUsedTrial(ctx, pool, userID) {
+			rows = append(rows, []inlineButton{button(tr(lang, "button_activate_trial"), "activate_trial")})
+		}
+		rows = append(rows,
 			[]inlineButton{button(tr(lang, "button_plans"), "menu:plans")},
 			[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
 		)
-		_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_limit_reached"), limits.maxTrackers), markup)
+		_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_limit_reached"), limits.maxTrackers), makeInlineKeyboard(rows...))
 		return false
 	}
 	return true
@@ -60,10 +64,15 @@ func updateTrackerInterval(ctx context.Context, pool *pgxpool.Pool, tg *telegram
 	// Enforce the plan's minimum. The interval menu only offers allowed values, but the
 	// user can also type a number in the awaiting_interval step — reject anything faster
 	// than their plan permits rather than silently accepting it.
-	minInterval := getPlanLimits(ctx, pool, userID).minIntervalMinutes
+	limits := getPlanLimits(ctx, pool, userID)
+	minInterval := limits.minIntervalMinutes
 	if minutes < minInterval {
-		markup := makeInlineKeyboard([]inlineButton{button(tr(lang, "button_plans"), "menu:plans")})
-		_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "interval_below_min"), formatInterval(lang, minInterval)), markup)
+		var rows [][]inlineButton
+		if limits.code == "free" && !hasUsedTrial(ctx, pool, userID) {
+			rows = append(rows, []inlineButton{button(tr(lang, "button_activate_trial"), "activate_trial")})
+		}
+		rows = append(rows, []inlineButton{button(tr(lang, "button_plans"), "menu:plans")})
+		_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "interval_below_min"), formatInterval(lang, minInterval)), makeInlineKeyboard(rows...))
 		return
 	}
 	tag, err := pool.Exec(ctx, `

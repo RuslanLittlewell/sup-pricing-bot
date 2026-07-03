@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -44,4 +46,42 @@ func countActiveTrackers(ctx context.Context, pool *pgxpool.Pool, userID string)
 	var n int
 	err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM trackers WHERE user_id = $1 AND status != 'deleted'`, userID).Scan(&n)
 	return n, err
+}
+
+// hasUsedTrial reports whether this user has already activated their one-time trial —
+// a user with no user_plans row yet has never used it.
+func hasUsedTrial(ctx context.Context, pool *pgxpool.Pool, userID string) bool {
+	var used bool
+	err := pool.QueryRow(ctx, `SELECT trial_used FROM user_plans WHERE user_id = $1`, userID).Scan(&used)
+	if err != nil {
+		return false
+	}
+	return used
+}
+
+// activateTrial upgrades the user to Trial (Basic-equivalent limits for trialDuration),
+// but only the first time — trial_used = false is enforced in the UPDATE's WHERE clause so
+// a user can never re-activate it, even after their trial plan has since expired back to
+// Free. Returns ok=false (no error) when the trial was already used.
+func activateTrial(ctx context.Context, pool *pgxpool.Pool, userID string) (ok bool, err error) {
+	var returnedID string
+	err = pool.QueryRow(ctx, `
+		INSERT INTO user_plans (user_id, plan_code, status, expires_at, trial_used)
+		VALUES ($1, 'trial', 'active', now() + interval '14 days', true)
+		ON CONFLICT (user_id) DO UPDATE SET
+			plan_code = 'trial',
+			status = 'active',
+			expires_at = now() + interval '14 days',
+			trial_used = true,
+			updated_at = now()
+		WHERE user_plans.trial_used = false
+		RETURNING user_id
+	`, userID).Scan(&returnedID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }

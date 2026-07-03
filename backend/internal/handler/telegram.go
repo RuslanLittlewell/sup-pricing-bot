@@ -199,6 +199,18 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		sendPlansMenu(ctx, pool, tg, chatID, userID, lang)
 	case strings.HasPrefix(data, "plan:"):
 		SendTelegramMessage(tg, chatID, tr(lang, "plan_free_active"))
+	case data == "activate_trial":
+		activated, err := activateTrial(ctx, pool, userID)
+		if err != nil {
+			log.Error().Err(err).Str("user_id", userID).Msg("failed to activate trial")
+			SendTelegramMessage(tg, chatID, tr(lang, "trial_activate_failed"))
+			return
+		}
+		if !activated {
+			SendTelegramMessage(tg, chatID, tr(lang, "trial_already_used"))
+			return
+		}
+		SendTelegramMessage(tg, chatID, tr(lang, "trial_activated"))
 	case data == "menu:new":
 		clearTelegramState(ctx, pool, chatID)
 		if !enforceTrackerLimit(ctx, pool, tg, chatID, userID, lang, log) {
