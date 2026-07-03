@@ -6,6 +6,23 @@ export interface AdminUser {
   trackerCount: number
 }
 
+export interface UserTracker {
+  id: string
+  title: string
+  url: string
+  domain: string
+  status: string
+  initialPrice: number
+  currentPrice: number | null
+  currency: string
+  extractionMethod: string
+  latestExtractionMethod?: string
+  createdAt: string
+  lastCheckedAt: string | null
+  consecutiveErrors: number
+  lastError: string | null
+}
+
 export interface FallbackTracker {
   userId: string
   userName: string
@@ -102,6 +119,10 @@ export function fetchUsers(creds: Credentials): Promise<AdminUser[]> {
 
 export function fetchTrackers(creds: Credentials): Promise<TrackersResponse> {
   return adminGet('/api/admin/trackers', creds)
+}
+
+export function fetchUserTrackers(creds: Credentials, userId: string): Promise<UserTracker[]> {
+  return adminGet(`/api/admin/users/${encodeURIComponent(userId)}/trackers`, creds)
 }
 
 export function deleteFailedTracker(

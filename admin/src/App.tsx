@@ -5,6 +5,7 @@ import { useAuth } from './useAuth'
 import { LoginForm } from './LoginForm'
 import { Layout } from './Layout'
 import { UsersPage } from './pages/UsersPage'
+import { UserTrackersPage } from './pages/UserTrackersPage'
 import { TrackersPage } from './pages/TrackersPage'
 
 function App() {
@@ -39,6 +40,10 @@ function App() {
         <Route
           path="/users"
           element={<UsersPage credentials={credentials} onAuthFailure={handleAuthFailure} />}
+        />
+        <Route
+          path="/users/:id/trackers"
+          element={<UserTrackersPage credentials={credentials} onAuthFailure={handleAuthFailure} />}
         />
         <Route
           path="/trackers"
