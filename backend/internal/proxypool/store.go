@@ -117,20 +117,70 @@ func (s *Store) AddManual(ctx context.Context, entries []ManualEntry) error {
 	return nil
 }
 
+// DiscoveredEntry is a free/public proxy found by an automatic source (see FetchGeonode) —
+// unauthenticated, and only ever inserted once: an address already in the pool is left
+// untouched rather than refreshed, unlike AddManual's paid-provider credential rotation
+// (re-discovering the same address on a public list tells us nothing new).
+type DiscoveredEntry struct {
+	Address     string
+	Protocol    string // "socks5" or "http"
+	CountryCode string
+	Source      string
+}
+
+// existingAddresses lists every address currently in the pool, for de-duplicating a
+// freshly-fetched public proxy list before checking (or storing) any of it.
+func (s *Store) existingAddresses(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.pool.Query(ctx, `SELECT address FROM proxies`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]bool{}
+	for rows.Next() {
+		var address string
+		if err := rows.Scan(&address); err != nil {
+			continue
+		}
+		out[address] = true
+	}
+	return out, rows.Err()
+}
+
+// addDiscovered inserts newly-found public proxies, skipping any address already present
+// (see DiscoveredEntry doc) — returns how many were actually new.
+func (s *Store) addDiscovered(ctx context.Context, entries []DiscoveredEntry) (added int, err error) {
+	for _, e := range entries {
+		tag, execErr := s.pool.Exec(ctx, `
+			INSERT INTO proxies (address, protocol, country_code, source)
+			VALUES ($1, $2, NULLIF($3, ''), $4)
+			ON CONFLICT (address) DO NOTHING
+		`, e.Address, e.Protocol, e.CountryCode, e.Source)
+		if execErr != nil {
+			return added, fmt.Errorf("add discovered proxy %s: %w", e.Address, execErr)
+		}
+		if tag.RowsAffected() > 0 {
+			added++
+		}
+	}
+	return added, nil
+}
+
 func (s *Store) checkAllAliveness(ctx context.Context, log zerolog.Logger) {
-	rows, err := s.pool.Query(ctx, `SELECT id, address, username, password FROM proxies`)
+	rows, err := s.pool.Query(ctx, `SELECT id, address, protocol, username, password FROM proxies`)
 	if err != nil {
 		log.Error().Err(err).Msg("proxypool: failed to list proxies for aliveness check")
 		return
 	}
 	type entry struct {
-		id, address        string
-		username, password *string
+		id, address, protocol string
+		username, password    *string
 	}
 	var all []entry
 	for rows.Next() {
 		var e entry
-		if err := rows.Scan(&e.id, &e.address, &e.username, &e.password); err != nil {
+		if err := rows.Scan(&e.id, &e.address, &e.protocol, &e.username, &e.password); err != nil {
 			continue
 		}
 		all = append(all, e)
@@ -149,17 +199,25 @@ func (s *Store) checkAllAliveness(ctx context.Context, log zerolog.Logger) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			var auth *xproxy.Auth
-			if e.username != nil && *e.username != "" {
-				password := ""
-				if e.password != nil {
-					password = *e.password
-				}
-				auth = &xproxy.Auth{User: *e.username, Password: password}
+			username, password := "", ""
+			if e.username != nil {
+				username = *e.username
+			}
+			if e.password != nil {
+				password = *e.password
 			}
 
 			checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			alive := CheckAlive(checkCtx, e.address, auth)
+			var alive bool
+			if e.protocol == "http" || e.protocol == "https" {
+				alive = CheckAliveHTTP(checkCtx, e.address, username, password)
+			} else {
+				var auth *xproxy.Auth
+				if username != "" {
+					auth = &xproxy.Auth{User: username, Password: password}
+				}
+				alive = CheckAlive(checkCtx, e.address, auth)
+			}
 			cancel()
 
 			status := "dead"
@@ -207,6 +265,66 @@ func (s *Store) Pick(ctx context.Context) (picked PickedProxy, ok bool) {
 		picked.Password = *password
 	}
 	return picked, true
+}
+
+// FetchFingerprint is a (User-Agent, proxy) pairing that previously produced a real page
+// (not a bot-detection block) for one specific URL — see GetFingerprint/SaveFingerprint.
+// A zero-value Proxy (Address == "") means the fetch went out directly, no proxy.
+type FetchFingerprint struct {
+	UserAgent string
+	Proxy     PickedProxy
+}
+
+// GetFingerprint returns the last combination that successfully fetched this exact URL,
+// if any — so a repeat scrape (e.g. the next scheduled price check) can retry what's
+// already known to work before gambling on a fresh random pick.
+func (s *Store) GetFingerprint(ctx context.Context, url string) (FetchFingerprint, bool) {
+	var fp FetchFingerprint
+	var proxyAddress, proxyUsername, proxyPassword *string
+	err := s.pool.QueryRow(ctx, `
+		SELECT user_agent, proxy_address, proxy_username, proxy_password
+		FROM scrape_fingerprints WHERE url = $1
+	`, url).Scan(&fp.UserAgent, &proxyAddress, &proxyUsername, &proxyPassword)
+	if err != nil {
+		return FetchFingerprint{}, false
+	}
+	if proxyAddress != nil {
+		fp.Proxy.Address = *proxyAddress
+	}
+	if proxyUsername != nil {
+		fp.Proxy.Username = *proxyUsername
+	}
+	if proxyPassword != nil {
+		fp.Proxy.Password = *proxyPassword
+	}
+	return fp, true
+}
+
+// SaveFingerprint remembers that this (User-Agent, proxy) pairing just fetched url
+// successfully, overwriting whatever was saved before — the most recent success is the
+// best bet for next time, not necessarily the first one ever found.
+func (s *Store) SaveFingerprint(ctx context.Context, url string, fp FetchFingerprint) error {
+	var proxyAddress, proxyUsername, proxyPassword *string
+	if fp.Proxy.Address != "" {
+		proxyAddress = &fp.Proxy.Address
+		if fp.Proxy.Username != "" {
+			proxyUsername = &fp.Proxy.Username
+			proxyPassword = &fp.Proxy.Password
+		}
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO scrape_fingerprints (url, user_agent, proxy_address, proxy_username, proxy_password, success_count, last_used_at)
+		VALUES ($1, $2, $3, $4, $5, 1, now())
+		ON CONFLICT (url) DO UPDATE SET
+			user_agent = $2,
+			proxy_address = $3,
+			proxy_username = $4,
+			proxy_password = $5,
+			success_count = scrape_fingerprints.success_count + 1,
+			last_used_at = now(),
+			updated_at = now()
+	`, url, fp.UserAgent, proxyAddress, proxyUsername, proxyPassword)
+	return err
 }
 
 // List returns every proxy in the pool for the admin dashboard, most recently used first.

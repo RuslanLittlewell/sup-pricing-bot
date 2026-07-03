@@ -403,7 +403,7 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 	if !enforceTrackerLimit(ctx, pool, tg, chatID, userID, lang, log) {
 		return
 	}
-	fetcher := extractor.NewPageFetcher(rend, cookiesFile, proxyURL)
+	fetcher := extractor.NewPageFetcher(rend, cookiesFile, proxyURL, proxypool.NewStore(pool))
 	body, fetchMethod, err := fetcher.Fetch(url)
 	if err != nil {
 		if fallback := extractor.NewSearchFallback(proxypool.NewStore(pool)); fallback != nil {

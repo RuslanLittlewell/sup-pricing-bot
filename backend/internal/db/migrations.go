@@ -101,6 +101,11 @@ var Migrations = []Migration{
 		Description: "add one-time trial plan",
 		SQL:         migrationV17,
 	},
+	{
+		Version:     18,
+		Description: "remember the user-agent/proxy pairing that last succeeded per URL",
+		SQL:         migrationV18,
+	},
 }
 
 const migrationV1 = `
@@ -488,6 +493,20 @@ ON CONFLICT (code) DO UPDATE SET
     check_interval_minutes = EXCLUDED.check_interval_minutes,
     price_history_days = EXCLUDED.price_history_days,
     is_paid = EXCLUDED.is_paid;
+`
+
+const migrationV18 = `
+CREATE TABLE IF NOT EXISTS scrape_fingerprints (
+    url TEXT PRIMARY KEY,
+    user_agent TEXT NOT NULL,
+    proxy_address TEXT,
+    proxy_username TEXT,
+    proxy_password TEXT,
+    success_count INT NOT NULL DEFAULT 1,
+    last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {
