@@ -174,9 +174,26 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
     el.getAttribute("content") || "",
     el.getAttribute("data-price") || ""
   ].join(" ");
+  // Sites built on web components (e.g. several major fashion retailers) render
+  // price widgets inside shadow DOM, which querySelectorAll can't see into by
+  // default; walk open shadow roots explicitly so those prices aren't invisible
+  // to the scan.
+  const deepElements = (root) => {
+    const out = [];
+    const stack = [root];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node.querySelectorAll) continue;
+      for (const el of node.querySelectorAll("*")) {
+        out.push(el);
+        if (el.shadowRoot) stack.push(el.shadowRoot);
+      }
+    }
+    return out;
+  };
   const found = () => {
     if (!target || !document.body) return false;
-    for (const node of document.querySelectorAll("body *")) {
+    for (const node of deepElements(document.body)) {
       if (!visible(node)) continue;
       const text = textOf(node);
       if (text && text.length <= 1200 && priceTokens(text).includes(target)) return true;
@@ -264,26 +281,39 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
     if (!target) return -1;
     return priceTokens(text).findIndex((token) => token.normalized === target);
   };
+  // Builds a selector that can cross shadow-root boundaries, joining each
+  // light/shadow tree's own path with " >>> " (mirrors the resolution logic in
+  // TextBySelector). Needed because a plain CSS path can't be re-queried with
+  // document.querySelector once it crosses into a shadow tree.
   const cssPath = (el) => {
-    const parts = [];
-    while (el && el.nodeType === 1 && el !== document.body) {
-      let part = el.tagName.toLowerCase();
-      if (el.id) {
-        part += "#" + CSS.escape(el.id);
+    const segments = [];
+    let current = el;
+    while (current) {
+      const parts = [];
+      let node = current;
+      while (node && node.nodeType === 1 && node !== document.body) {
+        let part = node.tagName.toLowerCase();
+        if (node.id) {
+          part += "#" + CSS.escape(node.id);
+          parts.unshift(part);
+          node = null;
+          break;
+        }
+        const cls = [...node.classList].slice(0, 2).map((c) => "." + CSS.escape(c)).join("");
+        if (cls) part += cls;
+        const parent = node.parentElement;
+        if (parent) {
+          const same = [...parent.children].filter((c) => c.tagName === node.tagName);
+          if (same.length > 1) part += ":nth-of-type(" + (same.indexOf(node) + 1) + ")";
+        }
         parts.unshift(part);
-        break;
+        node = parent;
       }
-      const cls = [...el.classList].slice(0, 2).map((c) => "." + CSS.escape(c)).join("");
-      if (cls) part += cls;
-      const parent = el.parentElement;
-      if (parent) {
-        const same = [...parent.children].filter((c) => c.tagName === el.tagName);
-        if (same.length > 1) part += ":nth-of-type(" + ([...parent.children].filter((c) => c.tagName === el.tagName).indexOf(el) + 1) + ")";
-      }
-      parts.unshift(part);
-      el = parent;
+      segments.unshift(parts.join(" > "));
+      const root = current.getRootNode();
+      current = root && root.host ? root.host : null;
     }
-    return parts.join(" > ");
+    return segments.join(" >>> ");
   };
   const bestBlock = (el) => {
     let block = el;
@@ -354,18 +384,38 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
     blocks.push({ priceEl, block, priceText, tokenIndex: idx });
   };
 
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  let textNode;
-  while ((textNode = walker.nextNode())) {
-    const text = (textNode.nodeValue || "").trim();
-    if (text && text.length <= 260 && matches(text)) addBlock(textNode.parentElement, text);
-  }
+  // document.body can be transiently null right after a client-side redirect
+  // (e.g. a bot-challenge interstitial reloading the page) races with this
+  // evaluation; bail out to "not found" instead of throwing.
+  if (document.body) {
+    // Walk document.body plus every open shadow root reachable from it, since
+    // some sites render their price widgets inside shadow DOM, which a plain
+    // TreeWalker/querySelectorAll rooted at document.body can't see into.
+    const deepRoots = (root) => {
+      const roots = [root];
+      for (let i = 0; i < roots.length; i++) {
+        for (const el of roots[i].querySelectorAll("*")) {
+          if (el.shadowRoot) roots.push(el.shadowRoot);
+        }
+      }
+      return roots;
+    };
 
-  for (const node of document.querySelectorAll("body *")) {
-    if (!visible(node)) continue;
-    const text = textOf(node);
-    if (!text || text.length > 700) continue;
-    if (matches(text)) addBlock(node, text);
+    for (const root of deepRoots(document.body)) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let textNode;
+      while ((textNode = walker.nextNode())) {
+        const text = (textNode.nodeValue || "").trim();
+        if (text && text.length <= 260 && matches(text)) addBlock(textNode.parentElement, text);
+      }
+
+      for (const node of root.querySelectorAll("*")) {
+        if (!visible(node)) continue;
+        const text = textOf(node);
+        if (!text || text.length > 700) continue;
+        if (matches(text)) addBlock(node, text);
+      }
+    }
   }
   const item = blocks[%d];
   if (!item) return {
@@ -409,11 +459,18 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
 		return &candidate, nil, fmt.Errorf("price block not found; title=%q text=%q total_found=%d", candidate.Title, candidate.Text, candidate.TotalFound)
 	}
 
+	// The selected candidate can live inside a shadow root, which the plain
+	// attribute-selector screenshot query below can't reach into (CDP's
+	// DOM.querySelector doesn't pierce shadow boundaries). Fall back to a
+	// full-page screenshot rather than failing the whole check just because
+	// the preview image can't be cropped to the exact block.
 	if err := chromedp.Run(ctx,
 		chromedp.Sleep(300*time.Millisecond),
 		chromedp.Screenshot(`[data-price-tracker-candidate="selected"]`, &screenshot, chromedp.ByQuery),
 	); err != nil {
-		return nil, nil, err
+		if err := chromedp.Run(ctx, chromedp.CaptureScreenshot(&screenshot)); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return &candidate, screenshot, nil
@@ -426,6 +483,44 @@ func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (st
 	ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
+	selectorJSON, _ := json.Marshal(selector)
+	// A selector recorded by FindPriceBlock's cssPath may cross shadow-root
+	// boundaries, joined with " >>> " — document.querySelector alone can't
+	// resolve those, so walk each segment through the previous match's
+	// shadowRoot. Selectors without " >>> " (the common case, and every
+	// selector recorded before shadow DOM support was added) resolve exactly
+	// as a plain querySelector would.
+	//
+	// This polls rather than reading once after a fixed sleep, since React/
+	// Vue/Angular-driven price widgets can still be hydrating client-side well
+	// after the initial page load — a fixed short sleep would read stale/empty
+	// content on a slow render.
+	script := fmt.Sprintf(`(() => new Promise((resolve) => {
+  const selector = %s;
+  const resolveText = () => {
+    const segments = selector.split(" >>> ");
+    let root = document;
+    let el = null;
+    for (let i = 0; i < segments.length; i++) {
+      el = root.querySelector(segments[i]);
+      if (!el) return "";
+      if (i < segments.length - 1) {
+        root = el.shadowRoot;
+        if (!root) return "";
+      }
+    }
+    return (el.innerText || el.textContent || "").trim();
+  };
+  const started = Date.now();
+  const tick = () => {
+    const text = resolveText();
+    if (text) return resolve(text);
+    if (Date.now() - started >= 12000) return resolve(text);
+    setTimeout(tick, 500);
+  };
+  tick();
+}))()`, string(selectorJSON))
+
 	var text string
 	if err := chromedp.Run(ctx,
 		r.setupProxyAuth(),
@@ -435,10 +530,12 @@ func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (st
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		acceptCookieBanners(),
 		simulateUserActivity(),
-		chromedp.Sleep(3*time.Second),
-		chromedp.Text(selector, &text, chromedp.ByQuery),
+		chromedp.Evaluate(script, &text),
 	); err != nil {
 		return "", err
+	}
+	if text == "" {
+		return "", fmt.Errorf("selector not found: %s", selector)
 	}
 
 	return text, nil

@@ -348,6 +348,20 @@ func extractByRegex(htmlContent string) []PriceCandidate {
 			Confidence: 0.4,
 			Label:      "Regex JSON match",
 		})
+		// Some sites store this same "price" field in minor units (cents/grosze)
+		// as a bare integer instead of a decimal amount — e.g. "22900" meaning
+		// 229.00, not literally 22 900. We can't tell which encoding a given
+		// site uses from the regex alone, so offer both readings as separate,
+		// lower-confidence candidates rather than silently trusting the 100x-
+		// too-large literal value.
+		if !strings.Contains(matches[1], ".") && len(matches[1]) > 2 {
+			minorUnits := matches[1][:len(matches[1])-2] + "." + matches[1][len(matches[1])-2:]
+			candidates = append(candidates, PriceCandidate{
+				Price:      minorUnits,
+				Confidence: 0.35,
+				Label:      "Regex JSON match (minor units)",
+			})
+		}
 	}
 
 	displayPrice := regexp.MustCompile(`([$€£₽zł]\s*\d[\d\s,.]*(?:[.,]\d{2})?)`)
