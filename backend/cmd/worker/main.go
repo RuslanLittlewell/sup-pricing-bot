@@ -288,19 +288,11 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 	}
 
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
-		var rule struct {
-			Type            string `json:"type"`
-			Selector        string `json:"selector"`
-			PriceTokenIndex *int   `json:"price_token_index"`
-		}
+		var rule cssTextRule
 		if err := json.Unmarshal(extractionRuleJSON, &rule); err == nil && rule.Type == "css_text" && rule.Selector != "" {
-			text, err := rend.TextBySelector(ctx, url, rule.Selector)
+			price, err := priceFromCSSRule(ctx, rend, url, rule, referencePrice)
 			if err != nil {
-				return 0, "", "", "", fmt.Errorf("rule extraction failed: %w", err)
-			}
-			price, ok := parsePriceFromTextAtIndex(text, rule.PriceTokenIndex, referencePrice)
-			if !ok {
-				return 0, "", "", "", fmt.Errorf("failed to parse price from selected block")
+				return 0, "", "", "", err
 			}
 			return price, fallbackCurrency, "unknown", "css_text", nil
 		}
@@ -341,6 +333,60 @@ func isSearchFallbackRuleType(ruleType string) bool {
 	default:
 		return false
 	}
+}
+
+type cssTextRule struct {
+	Type               string `json:"type"`
+	Selector           string `json:"selector"`
+	ScreenshotSelector string `json:"screenshot_selector"`
+	PriceTokenIndex    *int   `json:"price_token_index"`
+}
+
+func priceFromCSSRule(ctx context.Context, rend *renderer.Renderer, url string, rule cssTextRule, referencePrice *float64) (float64, error) {
+	text, err := rend.TextBySelector(ctx, url, rule.Selector)
+	if err != nil {
+		return 0, fmt.Errorf("rule extraction failed: %w", err)
+	}
+	price, ok := parsePriceFromTextAtIndex(text, rule.PriceTokenIndex, referencePrice)
+	if !ok {
+		return 0, fmt.Errorf("failed to parse price from selected block")
+	}
+
+	if referencePrice != nil && priceCents(price) == priceCents(*referencePrice) && rule.ScreenshotSelector != "" {
+		if blockText, err := rend.TextBySelector(ctx, url, rule.ScreenshotSelector); err == nil {
+			blockPrices := parseCurrencyPriceTokensFromText(blockText)
+			minRatio := 0.01
+			if len(blockPrices) == 0 {
+				blockPrices = parsePriceTokensFromText(blockText)
+				minRatio = 0.2
+			}
+			if salePrice, ok := chooseSalePrice(blockPrices, price, minRatio); ok {
+				return salePrice, nil
+			}
+		}
+	}
+
+	return price, nil
+}
+
+func chooseSalePrice(prices []float64, referencePrice float64, minRatio float64) (float64, bool) {
+	var (
+		best  float64
+		found bool
+	)
+	for _, price := range prices {
+		if priceCents(price) >= priceCents(referencePrice) {
+			continue
+		}
+		if minRatio > 0 && price < referencePrice*minRatio {
+			continue
+		}
+		if !found || price < best {
+			best = price
+			found = true
+		}
+	}
+	return best, found
 }
 
 func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency string) (float64, string, string, string, error) {
@@ -395,13 +441,18 @@ func parsePriceFromText(text string) (float64, bool) {
 	return price, ok
 }
 
+// parsePriceFromTextAtIndex picks a price out of a tracked block's text. The
+// block's token count can change between checks when a sibling discount
+// element (e.g. a crossed-out original price) appears next to the tracked
+// price, which would shift what rests at the recorded tokenIndex. To guard
+// against that, an unchanged price (matching referencePrice) always wins,
+// and when multiple distinct prices remain the smallest is preferred, since
+// a struck-through original price is never lower than the current one.
+// tokenIndex is only trusted as a last resort, when neither check applies.
 func parsePriceFromTextAtIndex(text string, tokenIndex *int, referencePrice *float64) (float64, bool) {
 	prices := parsePriceTokensFromText(text)
 	if len(prices) == 0 {
 		return 0, false
-	}
-	if tokenIndex != nil && *tokenIndex >= 0 && *tokenIndex < len(prices) {
-		return prices[*tokenIndex], true
 	}
 	if referencePrice != nil {
 		for _, price := range prices {
@@ -409,6 +460,18 @@ func parsePriceFromTextAtIndex(text string, tokenIndex *int, referencePrice *flo
 				return price, true
 			}
 		}
+	}
+	if len(prices) > 1 {
+		min := prices[0]
+		for _, price := range prices[1:] {
+			if price < min {
+				min = price
+			}
+		}
+		return min, true
+	}
+	if tokenIndex != nil && *tokenIndex >= 0 && *tokenIndex < len(prices) {
+		return prices[*tokenIndex], true
 	}
 	return prices[0], true
 }
@@ -419,6 +482,35 @@ func parsePriceTokensFromText(text string) []float64 {
 	prices := make([]float64, 0, len(matches))
 	for _, match := range matches {
 		if price, ok := parsePriceToken(match); ok {
+			prices = append(prices, price)
+		}
+	}
+	return prices
+}
+
+func parseCurrencyPriceTokensFromText(text string) []float64 {
+	normalized := normalizeUnicodeSpaces(text)
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(\d+(?:[\s.,]\d+)*)\s*(?:zł|pln|€|eur|\$|usd)`),
+		regexp.MustCompile(`(?i)(?:zł|pln|€|eur|\$|usd)\s*(\d+(?:[\s.,]\d+)*)`),
+	}
+
+	seen := map[int64]bool{}
+	var prices []float64
+	for _, pattern := range patterns {
+		for _, match := range pattern.FindAllStringSubmatch(normalized, -1) {
+			if len(match) < 2 {
+				continue
+			}
+			price, ok := parsePriceToken(match[1])
+			if !ok {
+				continue
+			}
+			cents := priceCents(price)
+			if seen[cents] {
+				continue
+			}
+			seen[cents] = true
 			prices = append(prices, price)
 		}
 	}

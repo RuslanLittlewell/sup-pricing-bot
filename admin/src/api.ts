@@ -16,6 +16,8 @@ export interface FallbackTracker {
 }
 
 export interface FailedTracker {
+  id: string
+  kind: 'tracker_error' | 'extraction_failure'
   userId: string
   userName: string
   title: string
@@ -79,10 +81,35 @@ async function adminGet<T>(path: string, creds: Credentials): Promise<T> {
   return res.json()
 }
 
+async function adminDelete(path: string, creds: Credentials): Promise<void> {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+    },
+  })
+  if (res.status === 401) {
+    throw new UnauthorizedError('Invalid username or password')
+  }
+  if (!res.ok) {
+    throw new Error(`DELETE ${path} failed: ${res.status}`)
+  }
+}
+
 export function fetchUsers(creds: Credentials): Promise<AdminUser[]> {
   return adminGet('/api/admin/users', creds)
 }
 
 export function fetchTrackers(creds: Credentials): Promise<TrackersResponse> {
   return adminGet('/api/admin/trackers', creds)
+}
+
+export function deleteFailedTracker(
+  creds: Credentials,
+  item: Pick<FailedTracker, 'id' | 'kind'>,
+): Promise<void> {
+  return adminDelete(
+    `/api/admin/trackers/failed/${encodeURIComponent(item.kind)}/${encodeURIComponent(item.id)}`,
+    creds,
+  )
 }

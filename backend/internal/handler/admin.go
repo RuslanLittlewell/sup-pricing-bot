@@ -5,9 +5,12 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 )
@@ -41,6 +44,8 @@ type adminFallbackTracker struct {
 }
 
 type adminFailedTracker struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
 	UserID    string `json:"userId"`
 	UserName  string `json:"userName"`
 	Title     string `json:"title"`
@@ -86,6 +91,7 @@ func AdminCors() func(http.Handler) http.Handler {
 			if isLocalOrigin(origin) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS")
 			}
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
@@ -167,6 +173,58 @@ func AdminTrackers(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
 	}
 }
 
+// AdminDeleteFailedTracker removes an item from the admin "failed extraction" list.
+// Items backed by extraction_failures are deleted; items backed by a live tracker have
+// last_error cleared so the tracker stays active but no longer appears in the admin list.
+func AdminDeleteFailedTracker(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		kind := chi.URLParam(r, "kind")
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			http.Error(w, `{"error":"missing id"}`, http.StatusBadRequest)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+
+		var (
+			tag pgconn.CommandTag
+			err error
+		)
+		switch kind {
+		case "extraction_failure":
+			tag, err = pool.Exec(ctx, `
+				DELETE FROM extraction_failures ef
+				USING (
+					SELECT user_id, url
+					FROM extraction_failures
+					WHERE id = $1
+				) target
+				WHERE ef.user_id = target.user_id AND ef.url = target.url
+			`, id)
+		case "tracker_error":
+			tag, err = pool.Exec(ctx, `
+				UPDATE trackers
+				SET last_error = NULL, consecutive_errors = 0, updated_at = now()
+				WHERE id = $1
+			`, id)
+		default:
+			http.Error(w, `{"error":"unknown failed item kind"}`, http.StatusBadRequest)
+			return
+		}
+		if err != nil {
+			log.Error().Err(err).Str("kind", kind).Str("id", id).Msg("failed to delete admin failed tracker item")
+			http.Error(w, `{"error":"failed to delete item"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"deleted":` + strconv.FormatInt(tag.RowsAffected(), 10) + `}`))
+	}
+}
+
 func loadAdminTrackers(ctx context.Context, pool *pgxpool.Pool) (*adminTrackersResponse, error) {
 	resp := &adminTrackersResponse{
 		FallbackTrackers: []adminFallbackTracker{},
@@ -203,29 +261,56 @@ func loadAdminTrackers(ctx context.Context, pool *pgxpool.Pool) (*adminTrackersR
 	// all since there's no tracker row to hang last_error off of.
 	failedRows, err := pool.Query(ctx, `
 		(
-			SELECT u.id, COALESCE(NULLIF(u.name, ''), u.email),
+			SELECT t.id::text, 'tracker_error', u.id, COALESCE(NULLIF(u.name, ''), u.email),
 			       COALESCE(t.title, t.domain), t.url, t.last_error, t.last_checked_at::text
 			FROM trackers t
 			JOIN "user" u ON u.id = t.user_id
 			WHERE t.status != 'deleted' AND t.last_error IS NOT NULL AND t.last_error != ''
+			  AND NOT EXISTS (
+			      SELECT 1
+			      FROM price_points pp
+			      WHERE pp.tracker_id = t.id
+			        AND pp.status = 'success'
+			        AND pp.extraction_method = ANY($1)
+			  )
 		)
 		UNION ALL
 		(
-			SELECT u.id, COALESCE(NULLIF(u.name, ''), u.email),
-			       ef.url, ef.url, ef.error, ef.created_at::text
-			FROM extraction_failures ef
-			JOIN "user" u ON u.id = ef.user_id
+			SELECT id, kind, user_id, user_name, title, url, error, timestamp
+			FROM (
+				SELECT DISTINCT ON (ef.user_id, ef.url)
+				       ef.id::text AS id,
+				       'extraction_failure' AS kind,
+				       u.id AS user_id,
+				       COALESCE(NULLIF(u.name, ''), u.email) AS user_name,
+				       ef.url AS title,
+				       ef.url AS url,
+				       ef.error AS error,
+				       ef.created_at::text AS timestamp
+				FROM extraction_failures ef
+				JOIN "user" u ON u.id = ef.user_id
+				WHERE NOT EXISTS (
+				      SELECT 1
+				      FROM trackers t
+				      JOIN price_points pp ON pp.tracker_id = t.id
+				      WHERE t.status != 'deleted'
+				        AND t.url = ef.url
+				        AND pp.status = 'success'
+				        AND pp.extraction_method = ANY($1)
+				)
+				ORDER BY ef.user_id, ef.url, ef.created_at DESC
+			) latest_failures
 		)
-		ORDER BY 6 DESC NULLS LAST
+		ORDER BY 8 DESC NULLS LAST
 		LIMIT 100
-	`)
+	`, adminSearchExtractionMethods)
 	if err != nil {
 		return nil, err
 	}
 	defer failedRows.Close()
 	for failedRows.Next() {
 		var f adminFailedTracker
-		if err := failedRows.Scan(&f.UserID, &f.UserName, &f.Title, &f.URL, &f.Error, &f.Timestamp); err != nil {
+		if err := failedRows.Scan(&f.ID, &f.Kind, &f.UserID, &f.UserName, &f.Title, &f.URL, &f.Error, &f.Timestamp); err != nil {
 			return nil, err
 		}
 		resp.FailedTrackers = append(resp.FailedTrackers, f)
