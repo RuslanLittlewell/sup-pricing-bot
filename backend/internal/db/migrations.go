@@ -81,6 +81,21 @@ var Migrations = []Migration{
 		Description: "track which method resolved each stock check",
 		SQL:         migrationV13,
 	},
+	{
+		Version:     14,
+		Description: "add proxy pool table",
+		SQL:         migrationV14,
+	},
+	{
+		Version:     15,
+		Description: "support authenticated proxies and track proxy source",
+		SQL:         migrationV15,
+	},
+	{
+		Version:     16,
+		Description: "track which fetch tier (direct/cf_relay/render) produced each check",
+		SQL:         migrationV16,
+	},
 }
 
 const migrationV1 = `
@@ -414,6 +429,47 @@ const migrationV13 = `
 -- same schema.org JSON-LD structured data price trackers already report as "json_ld"),
 -- so the admin dashboard can show it the same way it shows price trackers' method.
 ALTER TABLE stock_points ADD COLUMN IF NOT EXISTS extraction_method TEXT;
+`
+
+const migrationV14 = `
+-- Pool of scraping proxies (added via internal/proxypool.Store.AddManual), re-checked for
+-- aliveness hourly. "status" reflects that check, not any claim the proxy source made
+-- about it. use_count/last_used_at exist so the admin dashboard can show which proxies
+-- are actually carrying traffic, not just which ones exist.
+CREATE TABLE IF NOT EXISTS proxies (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    address TEXT NOT NULL UNIQUE,
+    protocol TEXT NOT NULL DEFAULT 'socks5',
+    country_code TEXT,
+    status TEXT NOT NULL DEFAULT 'unknown',
+    use_count INT NOT NULL DEFAULT 0,
+    last_checked_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_proxies_status ON proxies(status);
+`
+
+const migrationV15 = `
+-- Proxies are authenticated (username/password), since they come from a paid
+-- rotating-proxy provider's IP list rather than an open/anonymous one. "source" exists in
+-- case a second kind of source is ever added later.
+ALTER TABLE proxies ADD COLUMN IF NOT EXISTS username TEXT;
+ALTER TABLE proxies ADD COLUMN IF NOT EXISTS password TEXT;
+ALTER TABLE proxies ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
+`
+
+const migrationV16 = `
+-- Which PageFetcher tier (see extractor.FetchMethod* — "direct", "cf_relay", "render")
+-- actually produced the page body, tracked separately from extraction_method: the same
+-- extraction_method (e.g. "json_ld") can come from a page fetched three different ways,
+-- and without this there's no way to tell whether the Cloudflare relay tier is actually
+-- being exercised. NULL for checks where no PageFetcher tier applies (css_text, search
+-- fallback rule types) or for rows recorded before this column existed.
+ALTER TABLE price_points ADD COLUMN IF NOT EXISTS fetch_method TEXT;
+ALTER TABLE stock_points ADD COLUMN IF NOT EXISTS fetch_method TEXT;
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {

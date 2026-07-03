@@ -7,6 +7,7 @@ import { Layout } from './Layout'
 import { UsersPage } from './pages/UsersPage'
 import { UserTrackersPage } from './pages/UserTrackersPage'
 import { TrackersPage } from './pages/TrackersPage'
+import { ProxiesPage } from './pages/ProxiesPage'
 
 function App() {
   const { credentials, login, logout } = useAuth()
@@ -48,6 +49,10 @@ function App() {
         <Route
           path="/trackers"
           element={<TrackersPage credentials={credentials} onAuthFailure={handleAuthFailure} />}
+        />
+        <Route
+          path="/proxies"
+          element={<ProxiesPage credentials={credentials} onAuthFailure={handleAuthFailure} />}
         />
         <Route path="*" element={<Navigate to="/users" replace />} />
       </Route>

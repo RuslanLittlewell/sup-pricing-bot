@@ -39,6 +39,18 @@ function formatPrice(price: number | null, currency: string) {
   return `${price.toFixed(2)} ${currency}`
 }
 
+// How the page body was fetched, independent of how the price was parsed out of it — the
+// same extraction method (e.g. json_ld) can come from a page fetched three different
+// ways. Mirrors extractor.FetchMethod* in backend/internal/extractor/fetcher.go.
+function fetchMethodBadge(method: string) {
+  const label = method === 'cf_relay' ? 'relay' : method
+  return (
+    <Badge variant={method === 'cf_relay' ? 'default' : 'outline'} className="text-xs">
+      {label}
+    </Badge>
+  )
+}
+
 export function UserTrackersPage({
   credentials,
   onAuthFailure,
@@ -79,7 +91,8 @@ export function UserTrackersPage({
             How each tracker resolves its price — reading the page directly (json_ld,
             dom_attribute, meta_tag, microdata, css_selector, css_text) versus a paid search
             fallback. "Latest" only appears when a check since creation used a different
-            method than the one it was set up with.
+            method than the one it was set up with. "Fetched via" shows which tier actually
+            retrieved the page (direct / cf_relay / render) on the most recent check.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -148,6 +161,11 @@ export function UserTrackersPage({
                           {t.latestExtractionMethod ? (
                             <span className="text-xs text-muted-foreground">
                               latest: {methodBadge(t.latestExtractionMethod)}
+                            </span>
+                          ) : null}
+                          {t.latestFetchMethod ? (
+                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                              fetched via: {fetchMethodBadge(t.latestFetchMethod)}
                             </span>
                           ) : null}
                         </div>

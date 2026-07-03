@@ -23,6 +23,11 @@ type telegramState struct {
 	Currency       string
 	CandidateIndex int
 	Rule           json.RawMessage
+	// FetchMethod is transient (not a telegram_states column, not persisted across
+	// steps) — set only when constructing a one-shot telegramState right before calling
+	// createTrackerFromState from the text-candidate flow (see sendTextPriceCandidate),
+	// so the initial price_points row can record which PageFetcher tier fetched the page.
+	FetchMethod string
 }
 
 func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, text string, log zerolog.Logger, rend *renderer.Renderer, cfg *config.Config) bool {
@@ -184,13 +189,13 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	if fetcher == nil {
 		return false
 	}
-	body, err := fetcher.Fetch(url)
+	body, fetchMethod, err := fetcher.Fetch(url)
 	if err != nil {
 		log.Warn().Err(err).Str("url", url).Msg("text price candidate: fetch failed")
 		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, statusMsgID, lang)
 			if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
-				return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, result, "page fetch failed: "+err.Error(), log)
+				return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, "", result, "page fetch failed: "+err.Error(), log)
 			}
 		}
 		return false
@@ -210,10 +215,10 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		return false
 	}
 
-	return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, result, "screenshot price block not found", log)
+	return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, fetchMethod, result, "screenshot price block not found", log)
 }
 
-func handleTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency string, result *extractor.ExtractionResult, directErr string, log zerolog.Logger) bool {
+func handleTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency, fetchMethod string, result *extractor.ExtractionResult, directErr string, log zerolog.Logger) bool {
 	// Some extractors return multiple readings of the same underlying value (e.g.
 	// a raw JSON price field read both literally and as minor units) since we
 	// can't tell upfront which one is correct — so every candidate needs to be
@@ -240,6 +245,7 @@ func handleTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *teleg
 				InitialPrice: price,
 				Currency:     currency,
 				Rule:         candidate.Rule,
+				FetchMethod:  fetchMethod,
 			}, log)
 			return true
 		}

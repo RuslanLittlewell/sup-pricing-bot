@@ -13,6 +13,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
             <nav className="flex gap-1">
               <NavItem to="/users">Users</NavItem>
               <NavItem to="/trackers">Trackers</NavItem>
+              <NavItem to="/proxies">Proxies</NavItem>
             </nav>
           </div>
           <Button variant="ghost" size="sm" onClick={onLogout}>

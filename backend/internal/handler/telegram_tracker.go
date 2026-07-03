@@ -127,9 +127,9 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		Msg("telegram tracker created")
 
 	_, _ = pool.Exec(ctx, `
-		INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method)
-		VALUES (gen_random_uuid(), $1, $2, $3, 'bot_add', 'success', $4)
-	`, trackerID, state.InitialPrice, state.Currency, extractor.RuleType(state.Rule))
+		INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method, fetch_method)
+		VALUES (gen_random_uuid(), $1, $2, $3, 'bot_add', 'success', $4, NULLIF($5, ''))
+	`, trackerID, state.InitialPrice, state.Currency, extractor.RuleType(state.Rule), state.FetchMethod)
 
 	clearTelegramState(ctx, pool, chatID)
 	markup := makeInlineKeyboard(
@@ -146,7 +146,7 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 	}
 	SendTelegramMessage(tg, chatID, tr(lang, "stock_search_started"))
 
-	body, err := fetcher.Fetch(url)
+	body, fetchMethod, err := fetcher.Fetch(url)
 	if err != nil {
 		log.Error().Err(err).Str("url", url).Msg("failed to fetch page for stock tracker")
 		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "page_load_failed_detail"), err.Error()))
@@ -188,9 +188,9 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 		Msg("telegram stock tracker created")
 
 	pool.Exec(ctx, `
-		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method)
-		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success', 'keyword_scan')
-	`, trackerID, stockStatus)
+		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method, fetch_method)
+		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success', 'keyword_scan', $3)
+	`, trackerID, stockStatus, fetchMethod)
 
 	clearTelegramState(ctx, pool, chatID)
 	markup := makeInlineKeyboard(
@@ -212,6 +212,13 @@ func startStockTracking(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	createStockTrackerFromURL(ctx, pool, tg, chatID, userID, lang, url, log, fetcher)
 }
 
+// zaraSizeSelectionState is what offerZaraSizeSelection stashes in telegram_states.rule
+// while waiting for the user to pick a size (see the "size:" callback in telegram.go).
+type zaraSizeSelectionState struct {
+	FetchMethod string                  `json:"fetch_method"`
+	Variants    []shops.ZaraSizeVariant `json:"variants"`
+}
+
 // offerZaraSizeSelection shows a button per out-of-stock size and returns true, so the
 // caller stops here instead of falling back to whole-item tracking. Returns false (page
 // unreachable, no size data on it, or every size already in stock) to let the caller fall
@@ -219,7 +226,7 @@ func startStockTracking(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 func offerZaraSizeSelection(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, fetcher *extractor.PageFetcher) bool {
 	SendTelegramMessage(tg, chatID, tr(lang, "stock_search_started"))
 
-	body, err := fetcher.Fetch(url)
+	body, fetchMethod, err := fetcher.Fetch(url)
 	if err != nil {
 		log.Warn().Err(err).Str("url", url).Msg("zara size lookup: fetch failed, falling back to whole-item stock tracking")
 		return false
@@ -241,7 +248,11 @@ func offerZaraSizeSelection(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		return false
 	}
 
-	ruleJSON, err := json.Marshal(outOfStock)
+	// fetch_method travels with the candidate list (not the eventual tracker's rule) so
+	// createZaraSizeTracker can record how *this* lookup reached the page, once the user
+	// picks a size — a re-fetch at that point would risk a different, possibly stale
+	// answer, so we don't re-derive it there.
+	ruleJSON, err := json.Marshal(zaraSizeSelectionState{FetchMethod: fetchMethod, Variants: outOfStock})
 	if err != nil {
 		log.Error().Err(err).Msg("failed to marshal zara size candidates")
 		return false
@@ -276,7 +287,7 @@ func offerZaraSizeSelection(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 // createZaraSizeTracker creates a stock tracker scoped to one size — extraction_rule
 // records which one ("zara_size" + size + sku) so the worker's recheck can look up that
 // exact variant's availability instead of the item's as a whole.
-func createZaraSizeTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, title string, variant shops.ZaraSizeVariant, log zerolog.Logger) {
+func createZaraSizeTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, title, fetchMethod string, variant shops.ZaraSizeVariant, log zerolog.Logger) {
 	if !enforceTrackerLimit(ctx, pool, tg, chatID, userID, lang, log) {
 		clearTelegramState(ctx, pool, chatID)
 		return
@@ -309,9 +320,9 @@ func createZaraSizeTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram
 		Msg("telegram zara size tracker created")
 
 	pool.Exec(ctx, `
-		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method)
-		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success', 'json_ld')
-	`, trackerID, stockStatus)
+		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method, fetch_method)
+		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success', 'json_ld', $3)
+	`, trackerID, stockStatus, fetchMethod)
 
 	clearTelegramState(ctx, pool, chatID)
 	markup := makeInlineKeyboard(
@@ -383,7 +394,7 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 		return
 	}
 	fetcher := extractor.NewPageFetcher(rend, cookiesFile, proxyURL)
-	body, err := fetcher.Fetch(url)
+	body, fetchMethod, err := fetcher.Fetch(url)
 	if err != nil {
 		if fallback := extractor.NewSearchFallback(); fallback != nil {
 			notifyStillSearching(tg, chatID, 0, lang)
@@ -391,7 +402,7 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 				if isSearchFallbackRule(result.Candidates[0].Rule) {
 					recordExtractionFailure(ctx, pool, userID, url, fmt.Sprintf("page fetch failed: %s; resolved by %s exact URL fallback", err.Error(), extractor.RuleType(result.Candidates[0].Rule)), log)
 				}
-				finishAddTracker(ctx, pool, tg, chatID, userID, lang, url, result, log)
+				finishAddTracker(ctx, pool, tg, chatID, userID, lang, url, "", result, log)
 				return
 			}
 		}
@@ -421,14 +432,14 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 		recordExtractionFailure(ctx, pool, userID, url, fmt.Sprintf("page fetched but direct extractors failed; resolved by %s exact URL fallback", extractor.RuleType(result.Candidates[0].Rule)), log)
 	}
 
-	finishAddTracker(ctx, pool, tg, chatID, userID, lang, url, result, log)
+	finishAddTracker(ctx, pool, tg, chatID, userID, lang, url, fetchMethod, result, log)
 }
 
 // finishAddTracker is the shared tail of handleAddTracker: it persists the first
 // candidate from an already-produced ExtractionResult as a new tracker. Shared between
 // the normal path (page fetched, ran through attribute-based/generic/search fallback)
-// and the fetch-failed path.
-func finishAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, result *extractor.ExtractionResult, log zerolog.Logger) {
+// and the fetch-failed path (fetchMethod is "" there — no PageFetcher tier succeeded).
+func finishAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, fetchMethod string, result *extractor.ExtractionResult, log zerolog.Logger) {
 	candidate := result.Candidates[0]
 	newPrice, _, ok := parsePriceInput(candidate.Price)
 	if !ok {
@@ -451,9 +462,9 @@ func finishAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 
 	// Save initial price point
 	pool.Exec(ctx, `
-		INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method)
-		VALUES (gen_random_uuid(), $1, $2, $3, 'bot_add', 'success', $4)
-	`, trackerID, newPrice, candidate.Currency, extractor.RuleType(candidate.Rule))
+		INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method, fetch_method)
+		VALUES (gen_random_uuid(), $1, $2, $3, 'bot_add', 'success', $4, NULLIF($5, ''))
+	`, trackerID, newPrice, candidate.Currency, extractor.RuleType(candidate.Rule), fetchMethod)
 
 	pool.Exec(ctx, `
 		INSERT INTO stock_points (id, tracker_id, stock_status, source, status)

@@ -18,6 +18,7 @@ import (
 	"github.com/littlewell/price-tracker/internal/db"
 	"github.com/littlewell/price-tracker/internal/extractor"
 	"github.com/littlewell/price-tracker/internal/notifier"
+	"github.com/littlewell/price-tracker/internal/proxypool"
 	"github.com/littlewell/price-tracker/internal/renderer"
 	"github.com/littlewell/price-tracker/internal/telegram"
 )
@@ -78,6 +79,12 @@ func main() {
 	checkTrackers()
 	sendNotifications()
 
+	// Runs on its own hourly cadence rather than in the select loop below: a refresh
+	// checks aliveness of every pooled proxy (see Store.Refresh), which can take tens of
+	// seconds even with bounded concurrency — long enough that folding it into the
+	// tracker/notification ticks would delay them.
+	go runProxyPoolRefresher(ctx, pool, log)
+
 	for {
 		select {
 		case <-trackerTicker.C:
@@ -86,6 +93,22 @@ func main() {
 			sendNotifications()
 		case <-ctx.Done():
 			log.Info().Msg("worker shutting down")
+			return
+		}
+	}
+}
+
+func runProxyPoolRefresher(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger) {
+	store := proxypool.NewStore(pool)
+	store.Refresh(ctx, log)
+
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			store.Refresh(ctx, log)
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -142,7 +165,7 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 
 	log.Info().Str("tracker_id", id).Str("url", url).Msg("checking stock tracker")
 
-	body, err := fetcher.Fetch(url)
+	body, fetchMethod, err := fetcher.Fetch(url)
 	if err != nil {
 		log.Error().Err(err).Str("tracker_id", id).Msg("stock fetch failed")
 		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
@@ -157,9 +180,9 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 	}
 
 	pool.Exec(ctx, `
-		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method)
-		VALUES (gen_random_uuid(), $1, $2, 'worker_check', 'success', $3)
-	`, id, stockStatus, stockMethod)
+		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method, fetch_method)
+		VALUES (gen_random_uuid(), $1, $2, 'worker_check', 'success', $3, $4)
+	`, id, stockStatus, stockMethod, fetchMethod)
 
 	var prevStockStatus string
 	pool.QueryRow(ctx, `SELECT current_stock_status FROM trackers WHERE id = $1`, id).Scan(&prevStockStatus)
@@ -203,7 +226,7 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 
 	log.Info().Str("tracker_id", id).Str("url", url).Msg("checking tracker")
 
-	newPrice, newCurrency, stockStatus, extractionMethod, err := extractTrackerPrice(ctx, rend, fetcher, attr, generic, searchFallback, url, extractionRuleJSON, currency, currentPrice)
+	newPrice, newCurrency, stockStatus, extractionMethod, fetchMethod, err := extractTrackerPrice(ctx, rend, fetcher, attr, generic, searchFallback, url, extractionRuleJSON, currency, currentPrice)
 	if err != nil {
 		log.Error().Err(err).Str("tracker_id", id).Msg("extraction failed")
 		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
@@ -211,9 +234,9 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 	}
 
 	pool.Exec(ctx, `
-		INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method)
-		VALUES (gen_random_uuid(), $1, $2, $3, 'worker_check', 'success', $4)
-	`, id, newPrice, newCurrency, extractionMethod)
+		INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method, fetch_method)
+		VALUES (gen_random_uuid(), $1, $2, $3, 'worker_check', 'success', $4, NULLIF($5, ''))
+	`, id, newPrice, newCurrency, extractionMethod, fetchMethod)
 
 	pool.Exec(ctx, `
 		INSERT INTO stock_points (id, tracker_id, stock_status, source, status)
@@ -273,23 +296,29 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 	log.Info().Str("tracker_id", id).Float64("price", newPrice).Msg("tracker checked successfully")
 }
 
+// extractTrackerPrice returns (price, currency, stockStatus, extractionMethod,
+// fetchMethod, error). fetchMethod (see extractor.FetchMethod* constants) is only
+// meaningful when a PageFetcher tier actually produced the page body — it's "" for the
+// css_text and search-fallback paths, where extraction_method already fully describes
+// how the price was obtained.
 func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
 	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, searchFallback extractor.Extractor,
-	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, string, error) {
+	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, string, string, error) {
 
 	ruleType := extractor.RuleType(extractionRuleJSON)
 	if isSearchFallbackRuleType(ruleType) {
 		if searchFallback == nil {
-			return 0, "", "", "", fmt.Errorf("search fallback disabled for %s tracker", ruleType)
+			return 0, "", "", "", "", fmt.Errorf("search fallback disabled for %s tracker", ruleType)
 		}
 		result, err := searchFallback.Extract(nil, url)
 		if err != nil {
-			return 0, "", "", "", fmt.Errorf("search fallback extraction failed: %w", err)
+			return 0, "", "", "", "", fmt.Errorf("search fallback extraction failed: %w", err)
 		}
 		if result == nil || len(result.Candidates) == 0 {
-			return 0, "", "", "", fmt.Errorf("search fallback did not find an exact URL price")
+			return 0, "", "", "", "", fmt.Errorf("search fallback did not find an exact URL price")
 		}
-		return finalizePriceResult(result, fallbackCurrency, referencePrice)
+		price, currency, stockStatus, extractionMethod, err := finalizePriceResult(result, fallbackCurrency, referencePrice)
+		return price, currency, stockStatus, extractionMethod, "", err
 	}
 
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
@@ -297,23 +326,24 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 		if err := json.Unmarshal(extractionRuleJSON, &rule); err == nil && rule.Type == "css_text" && rule.Selector != "" {
 			price, err := priceFromCSSRule(ctx, rend, url, rule, referencePrice)
 			if err != nil {
-				return 0, "", "", "", err
+				return 0, "", "", "", "", err
 			}
-			return price, fallbackCurrency, "unknown", "css_text", nil
+			return price, fallbackCurrency, "unknown", "css_text", extractor.FetchMethodRender, nil
 		}
 	}
 
-	body, err := fetcher.Fetch(url)
+	body, fetchMethod, err := fetcher.Fetch(url)
 	if err != nil {
 		// The page itself is unreachable (bot-blocked, timed out, ...), so no
 		// HTML-based extractor can help. Search fallbacks do not need the page's
 		// current HTML, so they're the only tiers left worth trying here.
 		if searchFallback != nil {
 			if result, fallbackErr := searchFallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
-				return finalizePriceResult(result, fallbackCurrency, referencePrice)
+				price, currency, stockStatus, extractionMethod, err := finalizePriceResult(result, fallbackCurrency, referencePrice)
+				return price, currency, stockStatus, extractionMethod, "", err
 			}
 		}
-		return 0, "", "", "", fmt.Errorf("fetch failed: %w", err)
+		return 0, "", "", "", "", fmt.Errorf("fetch failed: %w", err)
 	}
 
 	result, err := attr.Extract(body, url)
@@ -325,10 +355,11 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 	}
 
 	if err != nil || len(result.Candidates) == 0 {
-		return 0, "", "", "", fmt.Errorf("extraction failed")
+		return 0, "", "", "", "", fmt.Errorf("extraction failed")
 	}
 
-	return finalizePriceResult(result, fallbackCurrency, referencePrice)
+	price, currency, stockStatus, extractionMethod, err := finalizePriceResult(result, fallbackCurrency, referencePrice)
+	return price, currency, stockStatus, extractionMethod, fetchMethod, err
 }
 
 func isSearchFallbackRuleType(ruleType string) bool {

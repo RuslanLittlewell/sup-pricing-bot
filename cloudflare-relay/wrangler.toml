@@ -1,0 +1,7 @@
+name = "price-tracker-relay"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# RELAY_TOKEN is a secret, not a var — set it with:
+#   wrangler secret put RELAY_TOKEN
+# then put the same value in the backend's CF_RELAY_TOKEN env var.
