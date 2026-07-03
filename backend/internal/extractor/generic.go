@@ -343,10 +343,12 @@ func extractByRegex(htmlContent string) []PriceCandidate {
 
 	jsonPrice := regexp.MustCompile(`"price"\s*:\s*"(\d+\.?\d*)"`)
 	if matches := jsonPrice.FindStringSubmatch(htmlContent); len(matches) > 1 {
+		rule, _ := json.Marshal(map[string]string{"type": "regex_json"})
 		candidates = append(candidates, PriceCandidate{
 			Price:      matches[1],
 			Confidence: 0.4,
 			Label:      "Regex JSON match",
+			Rule:       rule,
 		})
 		// Some sites store this same "price" field in minor units (cents/grosze)
 		// as a bare integer instead of a decimal amount — e.g. "22900" meaning
@@ -356,29 +358,35 @@ func extractByRegex(htmlContent string) []PriceCandidate {
 		// too-large literal value.
 		if !strings.Contains(matches[1], ".") && len(matches[1]) > 2 {
 			minorUnits := matches[1][:len(matches[1])-2] + "." + matches[1][len(matches[1])-2:]
+			minorRule, _ := json.Marshal(map[string]string{"type": "regex_json_minor_units"})
 			candidates = append(candidates, PriceCandidate{
 				Price:      minorUnits,
 				Confidence: 0.35,
 				Label:      "Regex JSON match (minor units)",
+				Rule:       minorRule,
 			})
 		}
 	}
 
 	displayPrice := regexp.MustCompile(`([$€£₽zł]\s*\d[\d\s,.]*(?:[.,]\d{2})?)`)
 	if matches := displayPrice.FindString(htmlContent); matches != "" {
+		rule, _ := json.Marshal(map[string]string{"type": "regex_display_price"})
 		candidates = append(candidates, PriceCandidate{
 			Price:      strings.TrimSpace(matches),
 			Confidence: 0.3,
 			Label:      "Regex text match",
+			Rule:       rule,
 		})
 	}
 
 	trailingCurrencyPrice := regexp.MustCompile(`(\d[\d\s,.]*(?:[.,]\d{2})?\s*(?:zł|PLN|€|EUR|\$|USD|£|GBP|₽|RUB))`)
 	if matches := trailingCurrencyPrice.FindString(htmlContent); matches != "" {
+		rule, _ := json.Marshal(map[string]string{"type": "regex_trailing_currency"})
 		candidates = append(candidates, PriceCandidate{
 			Price:      strings.TrimSpace(matches),
 			Confidence: 0.3,
 			Label:      "Regex trailing currency match",
+			Rule:       rule,
 		})
 	}
 

@@ -50,6 +50,14 @@ func (e *OpenSERPExtractor) Extract(_ []byte, pageURL string) (*ExtractionResult
 		return empty, nil
 	}
 
+	// Try reading the target page's own structured data first: OpenSERP's /extract
+	// fetches with tls-client fingerprinting and a headless-render fallback, which gets
+	// past bot protection that blocks our own fetcher, and its JSON-LD/OG-tag price is
+	// far more reliable than regexing whatever text a search snippet happens to contain.
+	if result, err := e.extractDirect(pageURL); err == nil && result != nil && len(result.Candidates) > 0 {
+		return result, nil
+	}
+
 	body, status, err := e.doRequest(pageURL)
 	if err != nil {
 		return nil, err
@@ -58,6 +66,113 @@ func (e *OpenSERPExtractor) Extract(_ []byte, pageURL string) (*ExtractionResult
 		return nil, fmt.Errorf("openserp returned status %d", status)
 	}
 	return parseOpenSERPResponse(body, pageURL)
+}
+
+// extractDirect calls OpenSERP's /extract endpoint on pageURL itself and looks for a
+// price in its parsed structured data (schema.org JSON-LD, then OpenGraph/Twitter Card
+// product tags). Returns a nil result (not an error) when the page fetched fine but
+// simply had no structured price to find, so the caller falls back to the search tier.
+func (e *OpenSERPExtractor) extractDirect(pageURL string) (*ExtractionResult, error) {
+	endpoint, err := url.Parse(e.baseURL + "/extract")
+	if err != nil {
+		return nil, fmt.Errorf("build openserp extract URL: %w", err)
+	}
+	q := endpoint.Query()
+	q.Set("url", pageURL)
+	q.Set("format", "json")
+	q.Set("mode", "auto")
+	endpoint.RawQuery = q.Encode()
+
+	ctx, cancel := context.WithTimeout(context.Background(), openSERPTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build openserp extract request: %w", err)
+	}
+	if e.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+e.apiKey)
+		req.Header.Set("X-API-Key", e.apiKey)
+	}
+
+	resp, err := e.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openserp extract request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openserp extract returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read openserp extract response: %w", err)
+	}
+
+	var parsed openSERPExtractResult
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("parse openserp extract response: %w", err)
+	}
+
+	rule, _ := json.Marshal(map[string]string{"type": "openserp_extract"})
+
+	for _, raw := range parsed.SchemaOrg {
+		var obj map[string]interface{}
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			continue
+		}
+		product := parseLDObject(obj)
+		if product == nil || product.Offers.Price == "" {
+			continue
+		}
+		return &ExtractionResult{
+			Title: firstNonEmptyString(parsed.Title, product.Name),
+			Candidates: []PriceCandidate{{
+				Price:      product.Offers.Price,
+				Currency:   product.Offers.PriceCurrency,
+				Confidence: 0.9,
+				Label:      "OpenSERP extract (JSON-LD)",
+				SourceURL:  parsed.URL,
+				Rule:       rule,
+			}},
+		}, nil
+	}
+
+	// OpenGraph's "product" object and Twitter's product Card use different key
+	// prefixes for the same thing across sites — check both.
+	if price := firstNonEmptyString(parsed.OGTags["product:price:amount"], parsed.OGTags["og:price:amount"]); price != "" {
+		currency := firstNonEmptyString(parsed.OGTags["product:price:currency"], parsed.OGTags["og:price:currency"])
+		return &ExtractionResult{
+			Title: parsed.Title,
+			Candidates: []PriceCandidate{{
+				Price:      price,
+				Currency:   currency,
+				Confidence: 0.85,
+				Label:      "OpenSERP extract (OG tag)",
+				SourceURL:  parsed.URL,
+				Rule:       rule,
+			}},
+		}, nil
+	}
+
+	return nil, nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+type openSERPExtractResult struct {
+	URL       string            `json:"url"`
+	Title     string            `json:"title"`
+	SchemaOrg []json.RawMessage `json:"schema_org"`
+	OGTags    map[string]string `json:"og_tags"`
 }
 
 func (e *OpenSERPExtractor) doRequest(pageURL string) ([]byte, int, error) {

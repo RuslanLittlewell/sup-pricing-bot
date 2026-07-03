@@ -270,7 +270,7 @@ func handleTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *teleg
 
 func isSearchFallbackRule(rule json.RawMessage) bool {
 	switch extractor.RuleType(rule) {
-	case "openserp_search_result", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet":
+	case "openserp_search_result", "openserp_extract", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet":
 		return true
 	default:
 		return false
