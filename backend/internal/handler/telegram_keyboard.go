@@ -60,11 +60,13 @@ var tributeSubscriptionURL = map[string]string{
 
 func sendPlansMenu(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string) {
 	currentPlan := getPlanLimits(ctx, pool, userID).code
+	trialUsed := hasUsedTrial(ctx, pool, userID)
 
 	plans := []struct {
 		code, nameKey, taglineKey, trackersKey, intervalKey string
 	}{
 		{"free", "plan_free_name", "plan_free_tagline", "plan_free_trackers", "plan_free_interval"},
+		{"trial", "plan_trial_name", "plan_trial_tagline", "plan_trial_trackers", "plan_trial_interval"},
 		{"basic", "plan_basic_name", "plan_basic_tagline", "plan_basic_trackers", "plan_basic_interval"},
 		{"pro", "plan_pro_name", "plan_pro_tagline", "plan_pro_trackers", "plan_pro_interval"},
 	}
@@ -73,13 +75,20 @@ func sendPlansMenu(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client,
 			tr(lang, p.nameKey), tr(lang, p.taglineKey), tr(lang, p.trackersKey), tr(lang, p.intervalKey))
 
 		var rows [][]inlineButton
-		if p.code == currentPlan {
+		switch {
+		case p.code == currentPlan:
 			// Mark the active plan and omit its "Activate" button — nothing to activate.
 			text += "\n\n<b>" + tr(lang, "plan_current") + "</b>"
-		} else {
+		case p.code == "free":
+			// Free is the default everyone always has — nothing to activate, ever.
+		case p.code == "trial" && trialUsed:
+			text += "\n\n" + tr(lang, "plan_trial_used")
+		default:
 			activateBtn := button(tr(lang, "button_activate"), "plan:"+p.code)
 			if url, ok := tributeSubscriptionURL[p.code]; ok {
 				activateBtn = linkButton(tr(lang, "button_activate"), url)
+			} else if p.code == "trial" {
+				activateBtn = button(tr(lang, "button_activate"), "activate_trial")
 			}
 			rows = append(rows, []inlineButton{activateBtn})
 		}

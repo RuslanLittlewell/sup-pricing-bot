@@ -96,6 +96,11 @@ var Migrations = []Migration{
 		Description: "track which fetch tier (direct/cf_relay/render) produced each check",
 		SQL:         migrationV16,
 	},
+	{
+		Version:     17,
+		Description: "add one-time trial plan",
+		SQL:         migrationV17,
+	},
 }
 
 const migrationV1 = `
@@ -470,6 +475,19 @@ const migrationV16 = `
 -- fallback rule types) or for rows recorded before this column existed.
 ALTER TABLE price_points ADD COLUMN IF NOT EXISTS fetch_method TEXT;
 ALTER TABLE stock_points ADD COLUMN IF NOT EXISTS fetch_method TEXT;
+`
+
+const migrationV17 = `
+ALTER TABLE user_plans ADD COLUMN IF NOT EXISTS trial_used BOOLEAN NOT NULL DEFAULT false;
+
+INSERT INTO plans (code, name, max_trackers, check_interval_minutes, price_history_days, is_paid)
+VALUES ('trial', 'Trial', 10, 60, 90, false)
+ON CONFLICT (code) DO UPDATE SET
+    name = EXCLUDED.name,
+    max_trackers = EXCLUDED.max_trackers,
+    check_interval_minutes = EXCLUDED.check_interval_minutes,
+    price_history_days = EXCLUDED.price_history_days,
+    is_paid = EXCLUDED.is_paid;
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {
