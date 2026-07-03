@@ -61,7 +61,8 @@ func main() {
 	fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
 	attributeExtractor := extractor.NewAttribute()
 	genericExtractor := extractor.NewGeneric()
-	searchFallback := extractor.NewSearchFallback()
+	proxyStore := proxypool.NewStore(pool)
+	searchFallback := extractor.NewSearchFallback(proxyStore)
 	if searchFallback == nil {
 		log.Warn().Msg("search fallback disabled: set OPEN_SERP_BASE_URL, SERPER_API_KEY, or SERPAPI_KEY")
 	} else {

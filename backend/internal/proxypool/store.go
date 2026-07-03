@@ -65,10 +65,25 @@ type PickedProxy struct {
 // URL renders the proxy as a socks5:// URL suitable for an HTTP client/renderer's proxy
 // config, embedding credentials only when the proxy has them.
 func (p PickedProxy) URL() string {
+	return p.urlWithScheme("socks5")
+}
+
+// HTTPURL renders the proxy as an http:// URL instead of socks5:// — needed for OpenSERP
+// specifically: it rejects authenticated socks5/socks5h proxies outright ("authenticated
+// SOCKS proxies are not supported in browser mode", since Chrome/CDP has no clean way to
+// answer a SOCKS5 auth challenge), but accepts http:// with embedded credentials fine.
+// Only use this where the target is known to accept HTTP-CONNECT-with-auth on the same
+// port a SOCKS5 dial would use — true of the rotating-proxy provider this pool currently
+// holds, not guaranteed for every proxy in general.
+func (p PickedProxy) HTTPURL() string {
+	return p.urlWithScheme("http")
+}
+
+func (p PickedProxy) urlWithScheme(scheme string) string {
 	if p.Username == "" {
-		return "socks5://" + p.Address
+		return scheme + "://" + p.Address
 	}
-	return fmt.Sprintf("socks5://%s:%s@%s", url.QueryEscape(p.Username), url.QueryEscape(p.Password), p.Address)
+	return fmt.Sprintf("%s://%s:%s@%s", scheme, url.QueryEscape(p.Username), url.QueryEscape(p.Password), p.Address)
 }
 
 // Refresh re-checks aliveness of every proxy currently in the pool (a previously-dead

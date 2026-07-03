@@ -32,3 +32,13 @@ func TestPickedProxyURL(t *testing.T) {
 		})
 	}
 }
+
+func TestPickedProxyHTTPURL(t *testing.T) {
+	p := PickedProxy{Address: "1.2.3.4:1080", Username: "user", Password: "pass"}
+	if got, want := p.HTTPURL(), "http://user:pass@1.2.3.4:1080"; got != want {
+		t.Errorf("HTTPURL() = %q, want %q", got, want)
+	}
+	if got, want := p.URL(), "socks5://user:pass@1.2.3.4:1080"; got != want {
+		t.Errorf("URL() = %q, want %q (should stay socks5, unaffected by HTTPURL)", got, want)
+	}
+}

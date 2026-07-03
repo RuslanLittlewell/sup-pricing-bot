@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/littlewell/price-tracker/internal/extractor"
+	"github.com/littlewell/price-tracker/internal/proxypool"
 	"github.com/littlewell/price-tracker/internal/renderer"
 	"github.com/littlewell/price-tracker/internal/shops"
 	"github.com/littlewell/price-tracker/internal/telegram"
@@ -396,7 +397,7 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 	fetcher := extractor.NewPageFetcher(rend, cookiesFile, proxyURL)
 	body, fetchMethod, err := fetcher.Fetch(url)
 	if err != nil {
-		if fallback := extractor.NewSearchFallback(); fallback != nil {
+		if fallback := extractor.NewSearchFallback(proxypool.NewStore(pool)); fallback != nil {
 			notifyStillSearching(tg, chatID, 0, lang)
 			if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
 				if isSearchFallbackRule(result.Candidates[0].Rule) {
@@ -418,7 +419,7 @@ func handleAddTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Clie
 		result, err = generic.Extract(body, url)
 	}
 	if err != nil || len(result.Candidates) == 0 {
-		if fallback := extractor.NewSearchFallback(); fallback != nil {
+		if fallback := extractor.NewSearchFallback(proxypool.NewStore(pool)); fallback != nil {
 			notifyStillSearching(tg, chatID, 0, lang)
 			result, err = fallback.Extract(body, url)
 		}
