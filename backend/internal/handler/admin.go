@@ -187,12 +187,17 @@ func AdminUserTrackers(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc 
 
 		rows, err := pool.Query(ctx, `
 			SELECT t.id, COALESCE(NULLIF(t.title, ''), t.domain), t.url, t.domain, t.status,
-			       t.initial_price, t.current_price, t.currency,
+			       t.initial_price, t.current_price, t.currency, t.tracking_mode,
 			       COALESCE(t.extraction_rule->>'type', 'unknown'),
 			       COALESCE((
 			           SELECT pp.extraction_method FROM price_points pp
 			           WHERE pp.tracker_id = t.id
 			           ORDER BY pp.checked_at DESC LIMIT 1
+			       ), ''),
+			       COALESCE((
+			           SELECT sp.extraction_method FROM stock_points sp
+			           WHERE sp.tracker_id = t.id
+			           ORDER BY sp.checked_at DESC LIMIT 1
 			       ), ''),
 			       t.created_at::text, t.last_checked_at::text, t.consecutive_errors, t.last_error
 			FROM trackers t
@@ -209,25 +214,34 @@ func AdminUserTrackers(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc 
 		trackers := []adminUserTracker{}
 		for rows.Next() {
 			var (
-				t             adminUserTracker
-				lastCheckedAt *string
-				latestMethod  string
+				t                 adminUserTracker
+				trackingMode      string
+				lastCheckedAt     *string
+				latestPriceMethod string
+				latestStockMethod string
 			)
 			if err := rows.Scan(&t.ID, &t.Title, &t.URL, &t.Domain, &t.Status,
-				&t.InitialPrice, &t.CurrentPrice, &t.Currency,
-				&t.ExtractionMethod, &latestMethod,
+				&t.InitialPrice, &t.CurrentPrice, &t.Currency, &trackingMode,
+				&t.ExtractionMethod, &latestPriceMethod, &latestStockMethod,
 				&t.CreatedAt, &lastCheckedAt, &t.ConsecutiveErrors, &t.LastError); err != nil {
 				log.Error().Err(err).Msg("failed to scan admin user tracker row")
 				http.Error(w, `{"error":"failed to load data"}`, http.StatusInternalServerError)
 				return
 			}
 			t.LastCheckedAt = lastCheckedAt
-			// Only surface this when it differs from how the tracker was originally set up —
-			// e.g. it started reading the page directly but has since had to fall back to a
-			// search API. Keeps the common, unremarkable case (always the same method) from
-			// cluttering every row with a redundant second badge.
-			if latestMethod != "" && latestMethod != t.ExtractionMethod {
-				t.LatestExtractionMethod = latestMethod
+			if trackingMode == "stock" {
+				// Stock trackers don't all set extraction_rule (only the size-specific ones
+				// do; a plain whole-item tracker has none) — the latest recorded check is the
+				// only reliable source for which method actually resolves it.
+				if latestStockMethod != "" {
+					t.ExtractionMethod = latestStockMethod
+				}
+			} else if latestPriceMethod != "" && latestPriceMethod != t.ExtractionMethod {
+				// Only surface this when it differs from how the tracker was originally set up
+				// — e.g. it started reading the page directly but has since had to fall back to
+				// a search API. Keeps the common, unremarkable case (always the same method)
+				// from cluttering every row with a redundant second badge.
+				t.LatestExtractionMethod = latestPriceMethod
 			}
 			trackers = append(trackers, t)
 		}
@@ -344,7 +358,7 @@ func loadAdminTrackers(ctx context.Context, pool *pgxpool.Pool) (*adminTrackersR
 	}
 
 	// Two sources of failure, combined: trackers that exist and have a recorded
-	// last_error (from a worker check or a manual /check), and extraction_failures —
+	// last_error (from a worker check), and extraction_failures —
 	// searches that failed before any tracker was ever created (e.g. /add, or the
 	// interactive "send a link, then a price" flow), which otherwise leave no trace at
 	// all since there's no tracker row to hang last_error off of.

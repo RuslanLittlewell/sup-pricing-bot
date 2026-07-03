@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"html"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/littlewell/price-tracker/internal/extractor"
 	"github.com/littlewell/price-tracker/internal/renderer"
+	"github.com/littlewell/price-tracker/internal/shops"
 	"github.com/littlewell/price-tracker/internal/telegram"
 )
 
@@ -186,8 +188,8 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 		Msg("telegram stock tracker created")
 
 	pool.Exec(ctx, `
-		INSERT INTO stock_points (id, tracker_id, stock_status, source, status)
-		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success')
+		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method)
+		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success', 'keyword_scan')
 	`, trackerID, stockStatus)
 
 	clearTelegramState(ctx, pool, chatID)
@@ -196,6 +198,127 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
 	)
 	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "stock_tracker_created"), title, url, stockStatus, trackerID[:8]), markup)
+}
+
+// startStockTracking is the entry point for the "track availability" flow. Most sites
+// only expose a whole-item in-stock/out-of-stock signal, but some (Zara, so far) publish
+// per-size availability in a structured block on the page — for those, offer a size
+// picker instead of tracking the item as a whole, since "back in stock" in one size the
+// user doesn't want isn't the notification they're after.
+func startStockTracking(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, fetcher *extractor.PageFetcher) {
+	if shops.IsZaraURL(url) && offerZaraSizeSelection(ctx, pool, tg, chatID, userID, lang, url, log, fetcher) {
+		return
+	}
+	createStockTrackerFromURL(ctx, pool, tg, chatID, userID, lang, url, log, fetcher)
+}
+
+// offerZaraSizeSelection shows a button per out-of-stock size and returns true, so the
+// caller stops here instead of falling back to whole-item tracking. Returns false (page
+// unreachable, no size data on it, or every size already in stock) to let the caller fall
+// back to the generic flow.
+func offerZaraSizeSelection(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, fetcher *extractor.PageFetcher) bool {
+	SendTelegramMessage(tg, chatID, tr(lang, "stock_search_started"))
+
+	body, err := fetcher.Fetch(url)
+	if err != nil {
+		log.Warn().Err(err).Str("url", url).Msg("zara size lookup: fetch failed, falling back to whole-item stock tracking")
+		return false
+	}
+
+	variants, err := shops.ParseZaraSizes(body)
+	if err != nil {
+		log.Info().Err(err).Str("url", url).Msg("zara size lookup: no size data found, falling back to whole-item stock tracking")
+		return false
+	}
+
+	var outOfStock []shops.ZaraSizeVariant
+	for _, v := range variants {
+		if !v.InStock {
+			outOfStock = append(outOfStock, v)
+		}
+	}
+	if len(outOfStock) == 0 {
+		return false
+	}
+
+	ruleJSON, err := json.Marshal(outOfStock)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to marshal zara size candidates")
+		return false
+	}
+
+	result, _ := extractor.NewGeneric().Extract(body, url)
+	title := ""
+	if result != nil {
+		title = result.Title
+	}
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO telegram_states (telegram_id, user_id, step, url, title, rule)
+		VALUES ($1, $2, 'awaiting_size', $3, $4, $5)
+		ON CONFLICT (telegram_id) DO UPDATE
+		SET user_id = $2, step = 'awaiting_size', url = $3, title = $4, rule = $5, updated_at = now()
+	`, chatID, userID, url, title, ruleJSON)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to save size-selection state")
+		return false
+	}
+
+	var rows [][]inlineButton
+	for i, v := range outOfStock {
+		rows = append(rows, []inlineButton{button(v.Size, fmt.Sprintf("size:%d", i))})
+	}
+	rows = append(rows, []inlineButton{button(tr(lang, "button_back"), "menu:back")})
+	_ = tg.SendMessageWithMarkup(chatID, tr(lang, "choose_size_prompt"), makeInlineKeyboard(rows...))
+	return true
+}
+
+// createZaraSizeTracker creates a stock tracker scoped to one size — extraction_rule
+// records which one ("zara_size" + size + sku) so the worker's recheck can look up that
+// exact variant's availability instead of the item's as a whole.
+func createZaraSizeTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, title string, variant shops.ZaraSizeVariant, log zerolog.Logger) {
+	if !enforceTrackerLimit(ctx, pool, tg, chatID, userID, lang, log) {
+		clearTelegramState(ctx, pool, chatID)
+		return
+	}
+
+	if title == "" {
+		title = extractDomain(url)
+	}
+	rule, _ := json.Marshal(map[string]string{"type": "zara_size", "size": variant.Size, "sku": variant.SKU})
+	const stockStatus = "out_of_stock" // only out-of-stock sizes are ever offered
+
+	var trackerID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO trackers (user_id, url, normalized_url, domain, title, initial_price, current_price, currency, current_stock_status, tracking_mode, extraction_rule, status, next_check_at)
+		VALUES ($1, $2, $2, $3, $4, 0, NULL, 'PLN', $5, 'stock', $6, 'active', now() + interval '3 hours')
+		RETURNING id
+	`, userID, url, extractDomain(url), title, stockStatus, rule).Scan(&trackerID)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create zara size tracker")
+		SendTelegramMessage(tg, chatID, tr(lang, "tracker_create_failed"))
+		clearTelegramState(ctx, pool, chatID)
+		return
+	}
+	log.Info().
+		Int64("telegram_id", chatID).
+		Str("user_id", userID).
+		Str("tracker_id", trackerID).
+		Str("url", url).
+		Str("size", variant.Size).
+		Msg("telegram zara size tracker created")
+
+	pool.Exec(ctx, `
+		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method)
+		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success', 'json_ld')
+	`, trackerID, stockStatus)
+
+	clearTelegramState(ctx, pool, chatID)
+	markup := makeInlineKeyboard(
+		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
+		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
+	)
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "size_tracker_created"), title, variant.Size, url, trackerID[:8]), markup)
 }
 
 type trackerListRow struct {
@@ -366,99 +489,6 @@ func handleDeleteTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 		return
 	}
 	SendTelegramMessage(tg, chatID, tr(lang, "tracker_deleted"))
-}
-
-func handleCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, trackerID string, log zerolog.Logger, rend *renderer.Renderer, cookiesFile, proxyURL string) {
-	var url, currency, trackingMode string
-	err := pool.QueryRow(ctx, `SELECT url, currency, tracking_mode FROM trackers WHERE id::text LIKE $1 || '%' AND user_id = $2`, trackerID, userID).Scan(&url, &currency, &trackingMode)
-	if err != nil {
-		SendTelegramMessage(tg, chatID, tr(lang, "tracker_not_found"))
-		return
-	}
-
-	fetcher := extractor.NewPageFetcher(rend, cookiesFile, proxyURL)
-	body, err := fetcher.Fetch(url)
-	if err != nil {
-		if trackingMode != "stock" {
-			if fallback := extractor.NewSearchFallback(); fallback != nil {
-				notifyStillSearching(tg, chatID, 0, lang)
-				if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
-					finishCheckTracker(ctx, pool, tg, chatID, lang, trackerID, currency, result)
-					return
-				}
-			}
-		}
-		recordManualCheckFailure(ctx, pool, trackerID, err.Error(), log)
-		SendTelegramMessage(tg, chatID, tr(lang, "page_load_failed"))
-		return
-	}
-
-	if trackingMode == "stock" {
-		stockStatus := extractor.DetectStockStatusFromText(body)
-		pool.Exec(ctx, `INSERT INTO stock_points (id, tracker_id, stock_status, source, status) VALUES (gen_random_uuid(), $1, $2, 'manual_check', 'success')`, trackerID, stockStatus)
-		pool.Exec(ctx, `UPDATE trackers SET previous_stock_status = current_stock_status, current_stock_status = $2, last_checked_at = now(), next_check_at = now() + (check_interval_minutes * interval '1 minute'), consecutive_errors = 0, last_error = NULL WHERE id::text LIKE $1 || '%'`, trackerID, stockStatus)
-		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "manual_check_done_stock"), stockStatus))
-		return
-	}
-
-	attr := extractor.NewAttribute()
-	result, err := attr.Extract(body, url)
-	if err != nil || len(result.Candidates) == 0 {
-		generic := extractor.NewGeneric()
-		result, err = generic.Extract(body, url)
-	}
-	if err != nil || len(result.Candidates) == 0 {
-		if fallback := extractor.NewSearchFallback(); fallback != nil {
-			notifyStillSearching(tg, chatID, 0, lang)
-			result, err = fallback.Extract(body, url)
-		}
-	}
-	if err != nil || len(result.Candidates) == 0 {
-		recordManualCheckFailure(ctx, pool, trackerID, "no price candidate found", log)
-		SendTelegramMessage(tg, chatID, tr(lang, "extract_failed"))
-		return
-	}
-
-	finishCheckTracker(ctx, pool, tg, chatID, lang, trackerID, currency, result)
-}
-
-// recordManualCheckFailure persists a failed manual /check to the tracker itself (it
-// already exists, unlike the add-tracker flow), so it shows up the same way an
-// automatic worker check failure would — via trackers.last_error.
-func recordManualCheckFailure(ctx context.Context, pool *pgxpool.Pool, trackerID, errMsg string, log zerolog.Logger) {
-	if _, err := pool.Exec(ctx, `
-		UPDATE trackers SET
-			last_error = $2,
-			last_checked_at = now(),
-			consecutive_errors = consecutive_errors + 1,
-			updated_at = now()
-		WHERE id::text LIKE $1 || '%'
-	`, trackerID, errMsg); err != nil {
-		log.Error().Err(err).Str("tracker_id", trackerID).Msg("failed to record manual check failure")
-	}
-}
-
-// finishCheckTracker is the shared tail of handleCheckTracker: it persists the first
-// candidate from an already-produced ExtractionResult as the tracker's latest reading.
-// Shared between the normal path (page fetched) and the fetch-failed path (page
-// unreachable, only the search fallback was available).
-func finishCheckTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, lang, trackerID, fallbackCurrency string, result *extractor.ExtractionResult) {
-	candidate := result.Candidates[0]
-	newPrice, _, ok := parsePriceInput(candidate.Price)
-	if !ok {
-		SendTelegramMessage(tg, chatID, tr(lang, "extract_failed"))
-		return
-	}
-
-	pool.Exec(ctx, `INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method) VALUES (gen_random_uuid(), $1, $2, $3, 'manual_check', 'success', $4)`, trackerID, newPrice, candidate.Currency, extractor.RuleType(candidate.Rule))
-	pool.Exec(ctx, `INSERT INTO stock_points (id, tracker_id, stock_status, source, status) VALUES (gen_random_uuid(), $1, $2, 'manual_check', 'success')`, trackerID, result.StockStatus)
-	nextCurrency := candidate.Currency
-	if nextCurrency == "" {
-		nextCurrency = fallbackCurrency
-	}
-	pool.Exec(ctx, `UPDATE trackers SET current_price = $2, current_stock_status = $3, currency = $4, last_checked_at = now(), next_check_at = now() + (check_interval_minutes * interval '1 minute'), consecutive_errors = 0, last_error = NULL WHERE id::text LIKE $1 || '%'`, trackerID, newPrice, result.StockStatus, nextCurrency)
-
-	SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "manual_check_done"), formatMoney(newPrice), result.StockStatus))
 }
 
 func handleTrackerHistory(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, trackerID string, log zerolog.Logger) {

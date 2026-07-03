@@ -14,6 +14,7 @@ import (
 	"github.com/littlewell/price-tracker/internal/config"
 	"github.com/littlewell/price-tracker/internal/extractor"
 	"github.com/littlewell/price-tracker/internal/renderer"
+	"github.com/littlewell/price-tracker/internal/shops"
 	"github.com/littlewell/price-tracker/internal/telegram"
 )
 
@@ -112,8 +113,6 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 			handleAddTracker(ctx, pool, tg, from.ID, userID, lang, text[5:], log, rend, cfg.ScraperCookies, cfg.ScraperProxy)
 		case strings.HasPrefix(text, "/delete "):
 			handleDeleteTracker(ctx, pool, tg, from.ID, userID, lang, text[8:], log)
-		case strings.HasPrefix(text, "/check "):
-			handleCheckTracker(ctx, pool, tg, from.ID, userID, lang, text[7:], log, rend, cfg.ScraperCookies, cfg.ScraperProxy)
 		case strings.HasPrefix(text, "/history "):
 			handleTrackerHistory(ctx, pool, tg, from.ID, userID, lang, text[9:], log)
 		case handleTrackerDialog(ctx, pool, tg, from.ID, userID, lang, text, log, rend, cfg):
@@ -253,7 +252,24 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			return
 		}
 		fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
-		createStockTrackerFromURL(ctx, pool, tg, chatID, userID, lang, state.URL, log, fetcher)
+		startStockTracking(ctx, pool, tg, chatID, userID, lang, state.URL, log, fetcher)
+	case strings.HasPrefix(data, "size:"):
+		state, ok := getTelegramState(ctx, pool, chatID)
+		if !ok || state.Step != "awaiting_size" {
+			sendMainMenu(tg, chatID, lang, tr(lang, "menu_stale"))
+			return
+		}
+		idx, err := strconv.Atoi(strings.TrimPrefix(data, "size:"))
+		if err != nil {
+			sendMainMenu(tg, chatID, lang, tr(lang, "menu_unknown_button"))
+			return
+		}
+		var variants []shops.ZaraSizeVariant
+		if err := json.Unmarshal(state.Rule, &variants); err != nil || idx < 0 || idx >= len(variants) {
+			sendMainMenu(tg, chatID, lang, tr(lang, "menu_stale"))
+			return
+		}
+		createZaraSizeTracker(ctx, pool, tg, chatID, userID, lang, state.URL, state.Title, variants[idx], log)
 	case data == "candidate:yes":
 		state, ok := getTelegramState(ctx, pool, chatID)
 		if !ok || state.Step != "awaiting_confirm" {
