@@ -214,32 +214,43 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 }
 
 func handleTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency string, result *extractor.ExtractionResult, directErr string, log zerolog.Logger) bool {
-	candidate := result.Candidates[0]
-	price, _, ok := parsePriceInput(candidate.Price)
-	if !ok {
-		return false
+	// Some extractors return multiple readings of the same underlying value (e.g.
+	// a raw JSON price field read both literally and as minor units) since we
+	// can't tell upfront which one is correct — so every candidate needs to be
+	// checked against the expected price, not just the first.
+	for _, candidate := range result.Candidates {
+		price, _, ok := parsePriceInput(candidate.Price)
+		if !ok {
+			continue
+		}
+		currency := candidate.Currency
+		if currency == "" {
+			currency = fallbackCurrency
+		}
+
+		sourceMatches := candidate.SourceURL == "" || extractor.SameURL(candidate.SourceURL, url)
+		priceMatches := priceCents(price) == priceCents(expectedPrice)
+		if sourceMatches && priceMatches {
+			if isSearchFallbackRule(candidate.Rule) {
+				recordExtractionFailure(ctx, pool, userID, url, fmt.Sprintf("%s; resolved by %s exact URL+price fallback", directErr, extractor.RuleType(candidate.Rule)), log)
+			}
+			createTrackerFromState(ctx, pool, tg, chatID, userID, lang, telegramState{
+				URL:          url,
+				Title:        result.Title,
+				InitialPrice: price,
+				Currency:     currency,
+				Rule:         candidate.Rule,
+			}, log)
+			return true
+		}
 	}
+
+	candidate := result.Candidates[0]
+	price, _, _ := parsePriceInput(candidate.Price)
 	currency := candidate.Currency
 	if currency == "" {
 		currency = fallbackCurrency
 	}
-
-	sourceMatches := candidate.SourceURL == "" || extractor.SameURL(candidate.SourceURL, url)
-	priceMatches := priceCents(price) == priceCents(expectedPrice)
-	if sourceMatches && priceMatches {
-		if isSearchFallbackRule(candidate.Rule) {
-			recordExtractionFailure(ctx, pool, userID, url, fmt.Sprintf("%s; resolved by %s exact URL+price fallback", directErr, extractor.RuleType(candidate.Rule)), log)
-		}
-		createTrackerFromState(ctx, pool, tg, chatID, userID, lang, telegramState{
-			URL:          url,
-			Title:        result.Title,
-			InitialPrice: price,
-			Currency:     currency,
-			Rule:         candidate.Rule,
-		}, log)
-		return true
-	}
-
 	errMsg := fmt.Sprintf("%s; fallback was not exact enough: expected=%.2f %s candidate=%s %s source=%q method=%s", directErr, expectedPrice, fallbackCurrency, candidate.Price, currency, candidate.SourceURL, extractor.RuleType(candidate.Rule))
 	recordExtractionFailure(ctx, pool, userID, url, errMsg, log)
 	log.Info().
