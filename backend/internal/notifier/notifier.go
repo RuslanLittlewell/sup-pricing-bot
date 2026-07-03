@@ -18,8 +18,8 @@ type Notifier struct {
 
 var notifierTexts = map[string]map[string]string{
 	"en": {
-		"price_changed":       "🔔 Price changed\n\nProduct: %s\nOld price: %s\nNew price: %s\n\nOpen product:\n%s",
-		"price_changed_first": "🔔 Price changed\n\nProduct: %s\nPrice: %s\n\nOpen product:\n%s",
+		"price_changed":       "🔔 Price changed\n\nProduct: %s\nInitial price: %s\nPrevious price: %s\nCurrent price: %s\n\nOpen product:\n%s",
+		"price_changed_first": "🔔 Price changed\n\nProduct: %s\nInitial price: %s\nNew price: %s\n\nOpen product:\n%s",
 		"back_in_stock":       "✅ Product is back in stock\n\nProduct: %s\nPrice: %s\n\nOpen product:\n%s",
 		"out_of_stock":        "❌ Product is out of stock\n\nProduct: %s\nLast price: %s\n\nOpen product:\n%s",
 		"stock_changed":       "📦 Stock status changed\n\nProduct: %s\nBefore: %s\nNow: %s\nPrice: %s\n\nOpen product:\n%s",
@@ -29,8 +29,8 @@ var notifierTexts = map[string]map[string]string{
 		"stock_out":           "out of stock",
 	},
 	"ru": {
-		"price_changed":       "🔔 Цена изменилась\n\nТовар: %s\nСтарая цена: %s\nНовая цена: %s\n\nОткрыть товар:\n%s",
-		"price_changed_first": "🔔 Цена изменилась\n\nТовар: %s\nЦена: %s\n\nОткрыть товар:\n%s",
+		"price_changed":       "🔔 Цена изменилась\n\nТовар: %s\nИзначальная цена: %s\nПрошлая цена: %s\nТекущая цена: %s\n\nОткрыть товар:\n%s",
+		"price_changed_first": "🔔 Цена изменилась\n\nТовар: %s\nИзначальная цена: %s\nНовая цена: %s\n\nОткрыть товар:\n%s",
 		"back_in_stock":       "✅ Товар снова в наличии\n\nТовар: %s\nЦена: %s\n\nОткрыть товар:\n%s",
 		"out_of_stock":        "❌ Товар закончился\n\nТовар: %s\nПоследняя цена: %s\n\nОткрыть товар:\n%s",
 		"stock_changed":       "📦 Статус наличия изменился\n\nТовар: %s\nБыло: %s\nСтало: %s\nЦена: %s\n\nОткрыть товар:\n%s",
@@ -40,8 +40,8 @@ var notifierTexts = map[string]map[string]string{
 		"stock_out":           "нет в наличии",
 	},
 	"pl": {
-		"price_changed":       "🔔 Cena się zmieniła\n\nProdukt: %s\nStara cena: %s\nNowa cena: %s\n\nOtwórz produkt:\n%s",
-		"price_changed_first": "🔔 Cena się zmieniła\n\nProdukt: %s\nCena: %s\n\nOtwórz produkt:\n%s",
+		"price_changed":       "🔔 Cena się zmieniła\n\nProdukt: %s\nCena początkowa: %s\nPoprzednia cena: %s\nAktualna cena: %s\n\nOtwórz produkt:\n%s",
+		"price_changed_first": "🔔 Cena się zmieniła\n\nProdukt: %s\nCena początkowa: %s\nNowa cena: %s\n\nOtwórz produkt:\n%s",
 		"back_in_stock":       "✅ Produkt znów jest dostępny\n\nProdukt: %s\nCena: %s\n\nOtwórz produkt:\n%s",
 		"out_of_stock":        "❌ Produkt jest niedostępny\n\nProdukt: %s\nOstatnia cena: %s\n\nOtwórz produkt:\n%s",
 		"stock_changed":       "📦 Status dostępności się zmienił\n\nProdukt: %s\nByło: %s\nTeraz: %s\nCena: %s\n\nOtwórz produkt:\n%s",
@@ -79,7 +79,7 @@ func (n *Notifier) SendPending(ctx context.Context) {
 		SELECT n.id, n.type, n.tracker_id, n.user_id,
 		       n.old_price, n.new_price, n.currency,
 		       n.old_stock_status, n.new_stock_status,
-		       t.title, t.url, t.current_price, t.currency,
+		       t.title, t.url, t.current_price, t.currency, t.initial_price,
 		       tl.telegram_id, COALESCE(tl.language, 'en')
 		FROM notifications n
 		JOIN trackers t ON t.id = n.tracker_id
@@ -110,25 +110,26 @@ func (n *Notifier) SendPending(ctx context.Context) {
 			url             string
 			currentPrice    *float64
 			trackerCurrency string
+			initialPrice    float64
 			telegramChatID  int64
 			lang            string
 		)
 		if err := rows.Scan(&id, &notifType, &trackerID, &userID,
 			&oldPrice, &newPrice, &currency,
 			&oldStockStatus, &newStockStatus,
-			&title, &url, &currentPrice, &trackerCurrency,
+			&title, &url, &currentPrice, &trackerCurrency, &initialPrice,
 			&telegramChatID, &lang); err != nil {
 			n.log.Error().Err(err).Msg("failed to scan notification")
 			continue
 		}
-		n.send(ctx, id, notifType, title, url, oldPrice, newPrice, currency, oldStockStatus, newStockStatus, currentPrice, trackerCurrency, telegramChatID, notifierLanguage(lang))
+		n.send(ctx, id, notifType, title, url, oldPrice, newPrice, currency, oldStockStatus, newStockStatus, currentPrice, trackerCurrency, initialPrice, telegramChatID, notifierLanguage(lang))
 	}
 }
 
 func (n *Notifier) send(ctx context.Context, id, notifType string, title *string, url string,
 	oldPrice, newPrice *float64, currency *string,
 	oldStockStatus, newStockStatus *string,
-	currentPrice *float64, trackerCurrency string,
+	currentPrice *float64, trackerCurrency string, initialPrice float64,
 	chatID int64, lang string) {
 
 	displayTitle := url
@@ -149,14 +150,14 @@ func (n *Notifier) send(ctx context.Context, id, notifType string, title *string
 		if newPrice != nil {
 			newStr = formatMoney(*newPrice)
 		}
+		initialStr := formatMoney(initialPrice)
 		// oldPrice is nil specifically for a tracker's first-ever price change (see
-		// cmd/worker/main.go's isFirstChange) — omit the "old price" line there since it
-		// would just repeat the initial_price the user already saw when adding the
-		// tracker, instead of showing genuinely new information.
+		// cmd/worker/main.go's isFirstChange), since there's no distinct "previous
+		// price" yet to show beyond the initial one.
 		if oldPrice == nil {
-			text = fmt.Sprintf(nt(lang, "price_changed_first"), displayTitle, newStr, url)
+			text = fmt.Sprintf(nt(lang, "price_changed_first"), displayTitle, initialStr, newStr, url)
 		} else {
-			text = fmt.Sprintf(nt(lang, "price_changed"), displayTitle, formatMoney(*oldPrice), newStr, url)
+			text = fmt.Sprintf(nt(lang, "price_changed"), displayTitle, initialStr, formatMoney(*oldPrice), newStr, url)
 		}
 
 	case "back_in_stock":
