@@ -112,6 +112,86 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
 	var screenshot []byte
 	priceJSON, _ := json.Marshal(price)
 
+	waitForPriceScript := fmt.Sprintf(`(() => new Promise((resolve) => {
+  const rawInput = String(%s).trim().toLowerCase();
+  const normalizePrice = (value) => {
+    let s = String(value || "")
+      .toLowerCase()
+      .replace(/\u00a0/g, " ")
+      .replace(/руб\.?|р\.|pln|zł|eur|usd|gbp|rub|[€$£₽]/gi, "")
+      .replace(/[^\d,.\s]/g, "")
+      .trim();
+    if (!/\d/.test(s)) return "";
+
+    const spaceGroups = s.split(/\s+/).filter(Boolean);
+    const hasDecimalSeparator = s.includes(",") || s.includes(".");
+    if (!hasDecimalSeparator && spaceGroups.length > 1 && spaceGroups[spaceGroups.length - 1].length <= 2) {
+      const fraction = spaceGroups.pop().padEnd(2, "0").slice(0, 2);
+      const integer = spaceGroups.join("").replace(/^0+(?=\d)/, "") || "0";
+      return integer + fraction;
+    }
+
+    s = s.replace(/\s+/g, "");
+    const lastComma = s.lastIndexOf(",");
+    const lastDot = s.lastIndexOf(".");
+    const decimalIndex = Math.max(lastComma, lastDot);
+    const decimalChar = decimalIndex >= 0 ? s[decimalIndex] : "";
+    const fractionLength = decimalIndex >= 0 ? s.length - decimalIndex - 1 : 0;
+    let integer = "";
+    let fraction = "00";
+
+    if (decimalChar && fractionLength > 0 && fractionLength <= 2) {
+      integer = s.slice(0, decimalIndex).replace(/[^\d]/g, "");
+      fraction = s.slice(decimalIndex + 1).replace(/[^\d]/g, "").padEnd(2, "0").slice(0, 2);
+    } else {
+      integer = s.replace(/[^\d]/g, "");
+    }
+
+    integer = integer.replace(/^0+(?=\d)/, "") || "0";
+    return integer + fraction;
+  };
+  const target = normalizePrice(rawInput);
+  const priceTokens = (text) => {
+    const tokens = [];
+    const re = /(?:[$€£₽]\s*)?\d[\d\s.,]*(?:\s*(?:zł|pln|eur|usd|gbp|rub|€|\$|£|₽))?/gi;
+    let match;
+    while ((match = re.exec(String(text || "")))) {
+      const normalized = normalizePrice(match[0]);
+      if (normalized) tokens.push(normalized);
+    }
+    return tokens;
+  };
+  const visible = (el) => {
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style && style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+  };
+  const textOf = (el) => [
+    el.innerText || "",
+    el.textContent || "",
+    el.getAttribute("aria-label") || "",
+    el.getAttribute("title") || "",
+    el.getAttribute("content") || "",
+    el.getAttribute("data-price") || ""
+  ].join(" ");
+  const found = () => {
+    if (!target || !document.body) return false;
+    for (const node of document.querySelectorAll("body *")) {
+      if (!visible(node)) continue;
+      const text = textOf(node);
+      if (text && text.length <= 1200 && priceTokens(text).includes(target)) return true;
+    }
+    return false;
+  };
+  const started = Date.now();
+  const tick = () => {
+    if (found()) return resolve(true);
+    if (Date.now() - started >= 18000) return resolve(false);
+    setTimeout(tick, 500);
+  };
+  tick();
+}))()`, string(priceJSON))
+
 	script := fmt.Sprintf(`(() => {
   const rawInput = String(%s).trim().toLowerCase();
   const normalizePrice = (value) => {
@@ -319,7 +399,8 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		acceptCookieBanners(),
 		simulateUserActivity(),
-		chromedp.Sleep(6*time.Second),
+		chromedp.Evaluate(waitForPriceScript, nil),
+		chromedp.Sleep(500*time.Millisecond),
 		chromedp.Evaluate(script, &candidate),
 	); err != nil {
 		return nil, nil, err

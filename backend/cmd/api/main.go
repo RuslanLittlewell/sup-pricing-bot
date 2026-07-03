@@ -130,6 +130,7 @@ func main() {
 			r.Use(handler.AdminAuth(cfg.AdminUsername, cfg.AdminPassword))
 			r.Get("/users", handler.AdminUsers(pool, log))
 			r.Get("/trackers", handler.AdminTrackers(pool, log))
+			r.Delete("/trackers/failed/{kind}/{id}", handler.AdminDeleteFailedTracker(pool, log))
 		})
 	})
 
