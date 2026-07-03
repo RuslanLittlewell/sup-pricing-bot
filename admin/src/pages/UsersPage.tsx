@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { fetchUsers, type AdminUser, type Credentials } from '@/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -62,7 +63,12 @@ export function UsersPage({
                     {u.id}
                   </TableCell>
                   <TableCell>
-                    <div>{u.name || u.email}</div>
+                    <Link
+                      to={`/users/${encodeURIComponent(u.id)}/trackers`}
+                      className="text-primary underline-offset-4 hover:underline"
+                    >
+                      {u.name || u.email}
+                    </Link>
                     {u.name && (
                       <div className="text-xs text-muted-foreground">{u.email}</div>
                     )}
@@ -72,7 +78,14 @@ export function UsersPage({
                       {u.planCode}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right">{u.trackerCount}</TableCell>
+                  <TableCell className="text-right">
+                    <Link
+                      to={`/users/${encodeURIComponent(u.id)}/trackers`}
+                      className="text-primary underline-offset-4 hover:underline"
+                    >
+                      {u.trackerCount}
+                    </Link>
+                  </TableCell>
                 </TableRow>
               ))
             )}

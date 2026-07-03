@@ -34,6 +34,23 @@ type adminUser struct {
 	TrackerCount int    `json:"trackerCount"`
 }
 
+type adminUserTracker struct {
+	ID                     string   `json:"id"`
+	Title                  string   `json:"title"`
+	URL                    string   `json:"url"`
+	Domain                 string   `json:"domain"`
+	Status                 string   `json:"status"`
+	InitialPrice           float64  `json:"initialPrice"`
+	CurrentPrice           *float64 `json:"currentPrice"`
+	Currency               string   `json:"currency"`
+	ExtractionMethod       string   `json:"extractionMethod"`
+	LatestExtractionMethod string   `json:"latestExtractionMethod,omitempty"`
+	CreatedAt              string   `json:"createdAt"`
+	LastCheckedAt          *string  `json:"lastCheckedAt"`
+	ConsecutiveErrors      int      `json:"consecutiveErrors"`
+	LastError              *string  `json:"lastError"`
+}
+
 type adminFallbackTracker struct {
 	UserID    string `json:"userId"`
 	UserName  string `json:"userName"`
@@ -146,6 +163,77 @@ func AdminUsers(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(users); err != nil {
 			log.Error().Err(err).Msg("failed to encode admin users response")
+		}
+	}
+}
+
+// AdminUserTrackers serves a single user's trackers: what they're tracking, and — the
+// point of this view — how each one's price gets resolved (extraction_rule's "type",
+// set once at creation time; see extractor.RuleType and each extractor's own rule
+// literal), so a support question like "why does this tracker behave oddly" can be
+// answered by seeing whether it reads the page directly (json_ld, dom_attribute,
+// meta_tag, microdata, css_selector, css_text) or fell back to a paid search API.
+func AdminUserTrackers(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := chi.URLParam(r, "id")
+		if userID == "" {
+			http.Error(w, `{"error":"missing user id"}`, http.StatusBadRequest)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+
+		rows, err := pool.Query(ctx, `
+			SELECT t.id, COALESCE(NULLIF(t.title, ''), t.domain), t.url, t.domain, t.status,
+			       t.initial_price, t.current_price, t.currency,
+			       COALESCE(t.extraction_rule->>'type', 'unknown'),
+			       COALESCE((
+			           SELECT pp.extraction_method FROM price_points pp
+			           WHERE pp.tracker_id = t.id
+			           ORDER BY pp.checked_at DESC LIMIT 1
+			       ), ''),
+			       t.created_at::text, t.last_checked_at::text, t.consecutive_errors, t.last_error
+			FROM trackers t
+			WHERE t.user_id = $1 AND t.status != 'deleted'
+			ORDER BY t.created_at DESC
+		`, userID)
+		if err != nil {
+			log.Error().Err(err).Str("user_id", userID).Msg("failed to query admin user trackers")
+			http.Error(w, `{"error":"failed to load data"}`, http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		trackers := []adminUserTracker{}
+		for rows.Next() {
+			var (
+				t             adminUserTracker
+				lastCheckedAt *string
+				latestMethod  string
+			)
+			if err := rows.Scan(&t.ID, &t.Title, &t.URL, &t.Domain, &t.Status,
+				&t.InitialPrice, &t.CurrentPrice, &t.Currency,
+				&t.ExtractionMethod, &latestMethod,
+				&t.CreatedAt, &lastCheckedAt, &t.ConsecutiveErrors, &t.LastError); err != nil {
+				log.Error().Err(err).Msg("failed to scan admin user tracker row")
+				http.Error(w, `{"error":"failed to load data"}`, http.StatusInternalServerError)
+				return
+			}
+			t.LastCheckedAt = lastCheckedAt
+			// Only surface this when it differs from how the tracker was originally set up —
+			// e.g. it started reading the page directly but has since had to fall back to a
+			// search API. Keeps the common, unremarkable case (always the same method) from
+			// cluttering every row with a redundant second badge.
+			if latestMethod != "" && latestMethod != t.ExtractionMethod {
+				t.LatestExtractionMethod = latestMethod
+			}
+			trackers = append(trackers, t)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(trackers); err != nil {
+			log.Error().Err(err).Msg("failed to encode admin user trackers response")
 		}
 	}
 }
