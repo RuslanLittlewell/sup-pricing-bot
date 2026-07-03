@@ -284,7 +284,7 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 		if result == nil || len(result.Candidates) == 0 {
 			return 0, "", "", "", fmt.Errorf("search fallback did not find an exact URL price")
 		}
-		return finalizePriceResult(result, fallbackCurrency)
+		return finalizePriceResult(result, fallbackCurrency, referencePrice)
 	}
 
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
@@ -305,7 +305,7 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 		// current HTML, so they're the only tiers left worth trying here.
 		if searchFallback != nil {
 			if result, fallbackErr := searchFallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
-				return finalizePriceResult(result, fallbackCurrency)
+				return finalizePriceResult(result, fallbackCurrency, referencePrice)
 			}
 		}
 		return 0, "", "", "", fmt.Errorf("fetch failed: %w", err)
@@ -323,7 +323,7 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 		return 0, "", "", "", fmt.Errorf("extraction failed")
 	}
 
-	return finalizePriceResult(result, fallbackCurrency)
+	return finalizePriceResult(result, fallbackCurrency, referencePrice)
 }
 
 func isSearchFallbackRuleType(ruleType string) bool {
@@ -389,9 +389,8 @@ func chooseSalePrice(prices []float64, referencePrice float64, minRatio float64)
 	return best, found
 }
 
-func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency string) (float64, string, string, string, error) {
-	candidate := result.Candidates[0]
-	newPrice, ok := parsePriceFromText(candidate.Price)
+func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency string, referencePrice *float64) (float64, string, string, string, error) {
+	candidate, newPrice, ok := bestPriceCandidate(result.Candidates, referencePrice)
 	if !ok {
 		return 0, "", "", "", fmt.Errorf("failed to parse price")
 	}
@@ -405,6 +404,40 @@ func finalizePriceResult(result *extractor.ExtractionResult, fallbackCurrency st
 		stockStatus = "unknown"
 	}
 	return newPrice, currency, stockStatus, extractor.RuleType(candidate.Rule), nil
+}
+
+// bestPriceCandidate picks which extraction candidate to trust when Extract returns more
+// than one — e.g. a raw vs. minor-units reading of the same ambiguous JSON price field
+// (see extractByRegex). Candidates aren't returned in confidence order, so naively taking
+// the first one can pick a 100x-scaled misread over the correct value. An unchanged price
+// (matching referencePrice) always wins first, since that's the strongest signal nothing
+// actually changed; otherwise the highest-confidence candidate is used.
+func bestPriceCandidate(candidates []extractor.PriceCandidate, referencePrice *float64) (extractor.PriceCandidate, float64, bool) {
+	if referencePrice != nil {
+		for _, c := range candidates {
+			price, ok := parsePriceFromText(c.Price)
+			if ok && priceCents(price) == priceCents(*referencePrice) {
+				return c, price, true
+			}
+		}
+	}
+
+	var (
+		best      extractor.PriceCandidate
+		bestPrice float64
+		bestConf  = -1.0
+		found     bool
+	)
+	for _, c := range candidates {
+		price, ok := parsePriceFromText(c.Price)
+		if !ok {
+			continue
+		}
+		if !found || c.Confidence > bestConf {
+			best, bestPrice, bestConf, found = c, price, c.Confidence, true
+		}
+	}
+	return best, bestPrice, found
 }
 
 func handleExtractionError(ctx context.Context, pool *pgxpool.Pool, id, errMsg string, consecutiveErrors int, checkInterval int, log zerolog.Logger) {

@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/littlewell/price-tracker/internal/extractor"
+)
 
 func TestParsePriceTokensFromTextWithNarrowNoBreakSpace(t *testing.T) {
 	prices := parsePriceTokensFromText("Cena 2\u202f699 zł")
@@ -47,5 +51,39 @@ func TestParsePriceFromTextAtIndexUsesTokenIndexWhenOnlyOnePriceFound(t *testing
 	}
 	if price != 199 {
 		t.Fatalf("expected the only price 199, got %v", price)
+	}
+}
+
+// A recheck of a tracker created off an ambiguous "price in minor units" JSON field
+// (see extractByRegex's regex_json / regex_json_minor_units candidates) must not
+// mistake the raw, 100x-too-large reading for a real price change just because it
+// happens to be listed first.
+func TestBestPriceCandidatePrefersUnchangedPriceOverFirstCandidate(t *testing.T) {
+	referencePrice := 229.0
+	candidates := []extractor.PriceCandidate{
+		{Price: "22900", Confidence: 0.4, Label: "Regex JSON match"},
+		{Price: "229.00", Confidence: 0.35, Label: "Regex JSON match (minor units)"},
+	}
+	_, price, ok := bestPriceCandidate(candidates, &referencePrice)
+	if !ok {
+		t.Fatal("expected a price to be found")
+	}
+	if price != 229 {
+		t.Fatalf("expected unchanged reference price 229, got %v", price)
+	}
+}
+
+func TestBestPriceCandidatePrefersHighestConfidenceWhenNoReferenceMatches(t *testing.T) {
+	candidates := []extractor.PriceCandidate{
+		{Price: "22900", Confidence: 0.4, Label: "Regex JSON match"},
+		{Price: "229.00", Confidence: 0.35, Label: "Regex JSON match (minor units)"},
+		{Price: "199.00", Confidence: 0.95, Label: "JSON-LD price"},
+	}
+	_, price, ok := bestPriceCandidate(candidates, nil)
+	if !ok {
+		t.Fatal("expected a price to be found")
+	}
+	if price != 199 {
+		t.Fatalf("expected highest-confidence price 199, got %v", price)
 	}
 }
