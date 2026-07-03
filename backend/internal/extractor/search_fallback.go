@@ -1,12 +1,17 @@
 package extractor
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/littlewell/price-tracker/internal/proxypool"
+)
 
 // NewSearchFallback returns the search-backed fallback chain. OpenSERP is tried first,
-// Serper second, and SerpAPI is kept as the final fallback.
-func NewSearchFallback() Extractor {
+// Serper second, and SerpAPI is kept as the final fallback. proxies may be nil (no pool
+// wired up) — OpenSERP then just uses its own IP, same as before the pool existed.
+func NewSearchFallback(proxies *proxypool.Store) Extractor {
 	var chain fallbackChain
-	if openserp := NewOpenSERP(); openserp != nil {
+	if openserp := NewOpenSERP(proxies); openserp != nil {
 		chain.extractors = append(chain.extractors, openserp)
 	}
 	if serper := NewSerper(); serper != nil {

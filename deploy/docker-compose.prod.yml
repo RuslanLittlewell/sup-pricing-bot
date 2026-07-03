@@ -35,6 +35,11 @@ services:
     image: karust/openserp:latest
     restart: unless-stopped
     command: ["serve", "-a", "0.0.0.0", "-p", "7000"]
+    environment:
+      # Off by default in openserp itself — without this, our per-request X-Proxy-URL
+      # header (see extractor.OpenSERPExtractor.setProxyHeader, backed by the proxy pool
+      # in internal/proxypool) is rejected.
+      OPENSERP_PROXIES_ALLOW_REQUEST_PROXY_URL: "true"
     # No published host port — only backend/worker (same compose network) reach it, at
     # http://openserp:7000. Free/self-hosted search+extract fallback, ahead of the paid
     # Serper/SerpAPI tiers.

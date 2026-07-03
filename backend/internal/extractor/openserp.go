@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/littlewell/price-tracker/internal/proxypool"
 )
 
 const openSERPTimeout = 45 * time.Second
@@ -22,10 +24,12 @@ type OpenSERPExtractor struct {
 	apiKey     string
 	engines    string
 	httpClient *http.Client
+	proxies    *proxypool.Store
 }
 
-// NewOpenSERP returns nil when OPEN_SERP_BASE_URL is not configured.
-func NewOpenSERP() *OpenSERPExtractor {
+// NewOpenSERP returns nil when OPEN_SERP_BASE_URL is not configured. proxies may be nil
+// (no pool wired up yet) — each request then goes out on OpenSERP's own IP as before.
+func NewOpenSERP(proxies *proxypool.Store) *OpenSERPExtractor {
 	baseURL := strings.TrimRight(os.Getenv("OPEN_SERP_BASE_URL"), "/")
 	if baseURL == "" {
 		return nil
@@ -39,7 +43,28 @@ func NewOpenSERP() *OpenSERPExtractor {
 		apiKey:     os.Getenv("OPEN_SERP_API_KEY"),
 		engines:    engines,
 		httpClient: &http.Client{Timeout: openSERPTimeout},
+		proxies:    proxies,
 	}
+}
+
+// setProxyHeader asks the pool for a currently-alive proxy and, if one's available, tells
+// OpenSERP to route this one request through it via X-Proxy-URL — OpenSERP must have
+// allow_request_proxy_url enabled for this to take effect (see deploy/docker-compose.prod.yml's
+// openserp service). Silently does nothing when no pool is wired up or the pool is empty,
+// so a request always goes out one way or another.
+func (e *OpenSERPExtractor) setProxyHeader(req *http.Request) {
+	if e.proxies == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), 3*time.Second)
+	defer cancel()
+	picked, ok := e.proxies.Pick(ctx)
+	if !ok {
+		return
+	}
+	// http://, not picked.URL()'s socks5:// — OpenSERP rejects authenticated SOCKS
+	// proxies outright (see PickedProxy.HTTPURL's doc comment).
+	req.Header.Set("X-Proxy-URL", picked.HTTPURL())
 }
 
 func (e *OpenSERPExtractor) Domain() string { return "*openserp" }
@@ -94,6 +119,7 @@ func (e *OpenSERPExtractor) extractDirect(pageURL string) (*ExtractionResult, er
 		req.Header.Set("Authorization", "Bearer "+e.apiKey)
 		req.Header.Set("X-API-Key", e.apiKey)
 	}
+	e.setProxyHeader(req)
 
 	resp, err := e.httpClient.Do(req)
 	if err != nil {
@@ -201,6 +227,7 @@ func (e *OpenSERPExtractor) doRequest(pageURL string) ([]byte, int, error) {
 		req.Header.Set("Authorization", "Bearer "+e.apiKey)
 		req.Header.Set("X-API-Key", e.apiKey)
 	}
+	e.setProxyHeader(req)
 
 	resp, err := e.httpClient.Do(req)
 	if err != nil {

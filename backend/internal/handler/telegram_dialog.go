@@ -11,6 +11,7 @@ import (
 
 	"github.com/littlewell/price-tracker/internal/config"
 	"github.com/littlewell/price-tracker/internal/extractor"
+	"github.com/littlewell/price-tracker/internal/proxypool"
 	"github.com/littlewell/price-tracker/internal/renderer"
 	"github.com/littlewell/price-tracker/internal/telegram"
 )
@@ -192,7 +193,7 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	body, fetchMethod, err := fetcher.Fetch(url)
 	if err != nil {
 		log.Warn().Err(err).Str("url", url).Msg("text price candidate: fetch failed")
-		if fallback := extractor.NewSearchFallback(); fallback != nil {
+		if fallback := extractor.NewSearchFallback(proxypool.NewStore(pool)); fallback != nil {
 			notifyStillSearching(tg, chatID, statusMsgID, lang)
 			if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
 				return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, "", result, "page fetch failed: "+err.Error(), log)
@@ -206,7 +207,7 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		result, err = extractor.NewGeneric().Extract(body, url)
 	}
 	if err != nil || len(result.Candidates) == 0 {
-		if fallback := extractor.NewSearchFallback(); fallback != nil {
+		if fallback := extractor.NewSearchFallback(proxypool.NewStore(pool)); fallback != nil {
 			notifyStillSearching(tg, chatID, statusMsgID, lang)
 			result, err = fallback.Extract(body, url)
 		}
