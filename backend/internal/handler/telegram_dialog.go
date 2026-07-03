@@ -61,7 +61,7 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 		}
 		if hasState && state.Step == "awaiting_url_stock" {
 			fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
-			createStockTrackerFromURL(ctx, pool, tg, chatID, userID, lang, normalized, log, fetcher)
+			startStockTracking(ctx, pool, tg, chatID, userID, lang, normalized, log, fetcher)
 			return true
 		}
 		_, err := pool.Exec(ctx, `
@@ -164,7 +164,7 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 // Search fallback calls can take up to ~45s — long enough that without this
 // notice a user might think the bot stalled. It edits statusMsgID in place when one is
 // available (so we don't spam a new message for every progress update); otherwise it
-// sends a new message, since some call sites (e.g. /add, /check) never show an initial
+// sends a new message, since some call sites (e.g. /add) never show an initial
 // status message at all.
 func notifyStillSearching(tg *telegram.Client, chatID int64, statusMsgID int, lang string) {
 	text := tr(lang, "search_more_time")

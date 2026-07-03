@@ -76,6 +76,11 @@ var Migrations = []Migration{
 		Description: "log price extraction failures that happen before a tracker exists",
 		SQL:         migrationV12,
 	},
+	{
+		Version:     13,
+		Description: "track which method resolved each stock check",
+		SQL:         migrationV13,
+	},
 }
 
 const migrationV1 = `
@@ -400,6 +405,15 @@ CREATE TABLE IF NOT EXISTS extraction_failures (
 );
 
 CREATE INDEX IF NOT EXISTS idx_extraction_failures_user_id ON extraction_failures(user_id);
+`
+
+const migrationV13 = `
+-- Mirrors price_points.extraction_method (see V11) for stock checks: which method
+-- resolved this stock_status ("keyword_scan" for the generic whole-page phrase match,
+-- "json_ld" for a size-specific "zara_size" tracker, since shops.ParseZaraSizes reads the
+-- same schema.org JSON-LD structured data price trackers already report as "json_ld"),
+-- so the admin dashboard can show it the same way it shows price trackers' method.
+ALTER TABLE stock_points ADD COLUMN IF NOT EXISTS extraction_method TEXT;
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {

@@ -127,7 +127,7 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 			continue
 		}
 		if trackingMode == "stock" {
-			processStockTracker(ctx, pool, fetcher, id, url, consecutiveErrors, checkInterval, log)
+			processStockTracker(ctx, pool, fetcher, id, url, extractionRuleJSON, consecutiveErrors, checkInterval, log)
 			continue
 		}
 		processTracker(ctx, pool, rend, fetcher, attr, generic, searchFallback, id, url, extractionRuleJSON, currency, currentPrice, previousPrice, consecutiveErrors, checkInterval, log)
@@ -135,7 +135,7 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 }
 
 func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extractor.PageFetcher,
-	id, url string, consecutiveErrors, checkInterval int, log zerolog.Logger) {
+	id, url string, extractionRuleJSON []byte, consecutiveErrors, checkInterval int, log zerolog.Logger) {
 	if checkInterval <= 0 {
 		checkInterval = 180
 	}
@@ -149,12 +149,17 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 		return
 	}
 
-	stockStatus := extractor.DetectStockStatusFromText(body)
+	stockStatus, stockMethod, err := extractor.DetectStockStatus(extractionRuleJSON, body)
+	if err != nil {
+		log.Error().Err(err).Str("tracker_id", id).Msg("stock detection failed")
+		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
+		return
+	}
 
 	pool.Exec(ctx, `
-		INSERT INTO stock_points (id, tracker_id, stock_status, source, status)
-		VALUES (gen_random_uuid(), $1, $2, 'worker_check', 'success')
-	`, id, stockStatus)
+		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method)
+		VALUES (gen_random_uuid(), $1, $2, 'worker_check', 'success', $3)
+	`, id, stockStatus, stockMethod)
 
 	var prevStockStatus string
 	pool.QueryRow(ctx, `SELECT current_stock_status FROM trackers WHERE id = $1`, id).Scan(&prevStockStatus)
