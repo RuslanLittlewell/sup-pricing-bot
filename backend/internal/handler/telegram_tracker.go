@@ -115,6 +115,11 @@ func updateTrackerInterval(ctx context.Context, pool *pgxpool.Pool, tg *telegram
 	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "interval_saved"), formatInterval(lang, minutes)), markup)
 }
 
+// defaultNewTrackerIntervalMinutes is what every new tracker is created at — the user
+// then gets an interval picker right after (see sendPostCreateIntervalPrompt) to change it
+// for this specific tracker without having to separately open its Settings.
+const defaultNewTrackerIntervalMinutes = 180
+
 func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string, state telegramState, log zerolog.Logger) {
 	// Final guard: the limit is also checked when the flow starts, but /add and the menu
 	// flow are independent entry points, so re-check right before the insert.
@@ -129,10 +134,10 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 
 	var trackerID string
 	err := pool.QueryRow(ctx, `
-		INSERT INTO trackers (user_id, url, normalized_url, domain, title, initial_price, current_price, currency, current_stock_status, extraction_rule, extraction_confidence, status, next_check_at)
-		VALUES ($1, $2, $2, $3, $4, $5, $5, $6, 'unknown', $7, 0.9, 'active', now() + interval '3 hours')
+		INSERT INTO trackers (user_id, url, normalized_url, domain, title, initial_price, current_price, currency, current_stock_status, extraction_rule, extraction_confidence, status, check_interval_minutes, next_check_at)
+		VALUES ($1, $2, $2, $3, $4, $5, $5, $6, 'unknown', $7, 0.9, 'active', $8, now() + ($8 * interval '1 minute'))
 		RETURNING id
-	`, userID, state.URL, extractDomain(state.URL), title, state.InitialPrice, state.Currency, state.Rule).Scan(&trackerID)
+	`, userID, state.URL, extractDomain(state.URL), title, state.InitialPrice, state.Currency, state.Rule, defaultNewTrackerIntervalMinutes).Scan(&trackerID)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to create tracker from telegram state")
 		SendTelegramMessage(tg, chatID, tr(lang, "tracker_create_failed"))
@@ -155,10 +160,36 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 
 	clearTelegramState(ctx, pool, chatID)
 	markup := makeInlineKeyboard(
+		[]inlineButton{button(tr(lang, "button_settings"), "tracker:edit:"+trackerID[:8])},
 		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
 		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
 	)
-	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_created"), title, state.URL, formatMoney(state.InitialPrice), trackerID[:8]), markup)
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_created"), title, state.URL, formatMoney(state.InitialPrice), formatInterval(lang, defaultNewTrackerIntervalMinutes), trackerID[:8]), markup)
+
+	sendPostCreateIntervalPrompt(ctx, pool, tg, chatID, userID, lang, trackerID[:8], log)
+}
+
+// sendPostCreateIntervalPrompt shows an interval picker for the tracker that was just
+// created, tied to its real ID — clicking a button goes through the exact same
+// "interval:<id>:<minutes>" path as editing an existing tracker's interval later (see
+// handleTelegramCallback), so no separate "not-yet-created tracker" plumbing is needed.
+// The sent message's ID is stashed in telegram_states.pending_message_id so it gets
+// cleaned up (see clearPendingIntervalMessage) if the user does anything else instead of
+// tapping one of its buttons, rather than leaving stale buttons sitting in the chat.
+func sendPostCreateIntervalPrompt(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, trackerID string, log zerolog.Logger) {
+	minInterval := getPlanLimits(ctx, pool, userID).minIntervalMinutes
+	messageID, err := sendIntervalMenuGetID(tg, chatID, lang, trackerID, tr(lang, "interval_prompt"), minInterval)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to send post-create interval prompt")
+		return
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO telegram_states (telegram_id, user_id, step, pending_message_id)
+		VALUES ($1, $2, 'idle', $3)
+		ON CONFLICT (telegram_id) DO UPDATE SET step = 'idle', pending_message_id = $3, updated_at = now()
+	`, chatID, userID, messageID); err != nil {
+		log.Warn().Err(err).Msg("failed to save pending interval prompt message id")
+	}
 }
 
 func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, fetcher *extractor.PageFetcher) {

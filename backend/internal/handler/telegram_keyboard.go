@@ -123,7 +123,7 @@ func sendModeMenu(tg *telegram.Client, chatID int64, lang, text string) {
 // migrationV19), no paid tier goes that fast.
 var intervalOptions = []int{5, 30, 60, 180, 300, 1440}
 
-func sendIntervalMenu(tg *telegram.Client, chatID int64, lang, trackerID, text string, minInterval int) {
+func buildIntervalMenuMarkup(lang, trackerID string, minInterval int) json.RawMessage {
 	var row []inlineButton
 	var rows [][]inlineButton
 	for _, m := range intervalOptions {
@@ -140,7 +140,18 @@ func sendIntervalMenu(tg *telegram.Client, chatID int64, lang, trackerID, text s
 		rows = append(rows, row)
 	}
 	rows = append(rows, []inlineButton{button(tr(lang, "button_back"), "menu:list")})
-	_ = tg.SendMessageWithMarkup(chatID, text, makeInlineKeyboard(rows...))
+	return makeInlineKeyboard(rows...)
+}
+
+func sendIntervalMenu(tg *telegram.Client, chatID int64, lang, trackerID, text string, minInterval int) {
+	_ = tg.SendMessageWithMarkup(chatID, text, buildIntervalMenuMarkup(lang, trackerID, minInterval))
+}
+
+// sendIntervalMenuGetID is sendIntervalMenu's counterpart for callers that need the sent
+// message's ID — see sendPostCreateIntervalPrompt, which has to remember it so the picker
+// can be removed later if the user does something else instead of tapping a button.
+func sendIntervalMenuGetID(tg *telegram.Client, chatID int64, lang, trackerID, text string, minInterval int) (int, error) {
+	return tg.SendMessageWithMarkupGetID(chatID, text, buildIntervalMenuMarkup(lang, trackerID, minInterval))
 }
 
 func intervalOptionLabel(lang string, minutes int) string {

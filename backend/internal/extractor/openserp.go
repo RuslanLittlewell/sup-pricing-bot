@@ -17,6 +17,13 @@ import (
 
 const openSERPTimeout = 45 * time.Second
 
+// openSERPProxyRetryAttempts bounds how many times a request is retried with a freshly
+// picked proxy (see setProxyHeader, Store.Pick) before giving up — a single dead/failing
+// proxy shouldn't sink the whole extraction when the pool has other options. Retrying is
+// pointless when e.proxies is nil (no pool wired up: every attempt would go out the same
+// unproxied way), but harmless — the extra attempt(s) just repeat the identical request.
+const openSERPProxyRetryAttempts = 2
+
 // OpenSERPExtractor asks a self-hosted OpenSERP service to search for the product URL
 // and reads a currency-tagged price from the returned snippet or extracted content.
 type OpenSERPExtractor struct {
@@ -108,32 +115,16 @@ func (e *OpenSERPExtractor) extractDirect(pageURL string) (*ExtractionResult, er
 	q.Set("mode", "auto")
 	endpoint.RawQuery = q.Encode()
 
-	ctx, cancel := context.WithTimeout(context.Background(), openSERPTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", endpoint.String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("build openserp extract request: %w", err)
+	var body []byte
+	var lastErr error
+	for attempt := 1; attempt <= openSERPProxyRetryAttempts; attempt++ {
+		body, lastErr = e.doExtractAttempt(endpoint.String())
+		if lastErr == nil {
+			break
+		}
 	}
-	if e.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+e.apiKey)
-		req.Header.Set("X-API-Key", e.apiKey)
-	}
-	e.setProxyHeader(req)
-
-	resp, err := e.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("openserp extract request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openserp extract returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read openserp extract response: %w", err)
+	if lastErr != nil {
+		return nil, lastErr
 	}
 
 	var parsed openSERPExtractResult
@@ -185,6 +176,40 @@ func (e *OpenSERPExtractor) extractDirect(pageURL string) (*ExtractionResult, er
 	return nil, nil
 }
 
+// doExtractAttempt performs one /extract call — pulled out of extractDirect so a retry
+// (see openSERPProxyRetryAttempts) rebuilds the request from scratch, picking a fresh
+// proxy via setProxyHeader rather than reusing one that may have just failed.
+func (e *OpenSERPExtractor) doExtractAttempt(endpoint string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), openSERPTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build openserp extract request: %w", err)
+	}
+	if e.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+e.apiKey)
+		req.Header.Set("X-API-Key", e.apiKey)
+	}
+	e.setProxyHeader(req)
+
+	resp, err := e.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openserp extract request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openserp extract returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read openserp extract response: %w", err)
+	}
+	return body, nil
+}
+
 func firstNonEmptyString(values ...string) string {
 	for _, v := range values {
 		if v != "" {
@@ -216,10 +241,26 @@ func (e *OpenSERPExtractor) doRequest(pageURL string) ([]byte, int, error) {
 	q.Set("region", "PL")
 	endpoint.RawQuery = q.Encode()
 
+	var body []byte
+	var status int
+	var lastErr error
+	for attempt := 1; attempt <= openSERPProxyRetryAttempts; attempt++ {
+		body, status, lastErr = e.doSearchAttempt(endpoint.String())
+		if lastErr == nil {
+			break
+		}
+	}
+	return body, status, lastErr
+}
+
+// doSearchAttempt performs one /mega/search call — pulled out of doRequest so a retry
+// (see openSERPProxyRetryAttempts) rebuilds the request from scratch, picking a fresh
+// proxy via setProxyHeader rather than reusing one that may have just failed.
+func (e *OpenSERPExtractor) doSearchAttempt(endpoint string) ([]byte, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), openSERPTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", endpoint.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("build openserp request: %w", err)
 	}

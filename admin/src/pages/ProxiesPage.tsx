@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { fetchProxies, type AdminProxy, type Credentials } from '@/api'
+import { deleteDeadProxies, fetchProxies, type AdminProxy, type Credentials } from '@/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Table,
   TableBody,
@@ -31,6 +32,7 @@ export function ProxiesPage({
 }) {
   const [proxies, setProxies] = useState<AdminProxy[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     fetchProxies(credentials)
@@ -45,18 +47,44 @@ export function ProxiesPage({
   if (!proxies) return <p className="text-muted-foreground">Loading…</p>
 
   const aliveCount = proxies.filter((p) => p.status === 'alive').length
+  const deadCount = proxies.filter((p) => p.status === 'dead').length
+
+  async function handleDeleteDead() {
+    setDeleting(true)
+    try {
+      await deleteDeadProxies(credentials)
+      setProxies(await fetchProxies(credentials))
+    } catch (err) {
+      setError((err as Error).message)
+      onAuthFailure(err)
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>
-          Proxy pool ({proxies.length}, {aliveCount} alive)
-        </CardTitle>
-        <CardDescription>
-          Authenticated proxies added manually (e.g. from a paid rotating-proxy
-          provider), re-checked for aliveness hourly. Status reflects that check, not any
-          claim the provider made about it.
-        </CardDescription>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <CardTitle>
+              Proxy pool ({proxies.length}, {aliveCount} alive, {deadCount} dead)
+            </CardTitle>
+            <CardDescription>
+              Authenticated proxies added manually (e.g. from a paid rotating-proxy
+              provider), re-checked for aliveness hourly. Status reflects that check, not
+              any claim the provider made about it.
+            </CardDescription>
+          </div>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={deadCount === 0 || deleting}
+            onClick={handleDeleteDead}
+          >
+            {deleting ? 'Deleting…' : `Delete dead proxies (${deadCount})`}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         <Table>
