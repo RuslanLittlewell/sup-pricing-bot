@@ -329,6 +329,64 @@ func AdminProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
 	}
 }
 
+// AdminCheckProxy re-checks a single proxy's aliveness immediately (see
+// proxypool.Store.CheckOne) — the admin dashboard's per-proxy "ping" action, for when you
+// don't want to wait for the hourly sweep to find out whether one specific proxy is up.
+func AdminCheckProxy(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
+	store := proxypool.NewStore(pool)
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			http.Error(w, `{"error":"missing id"}`, http.StatusBadRequest)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+
+		address, alive, err := store.CheckOne(ctx, id)
+		if err != nil {
+			log.Error().Err(err).Str("id", id).Msg("failed to check proxy")
+			http.Error(w, `{"error":"failed to check proxy"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"address": address,
+			"alive":   alive,
+		}); err != nil {
+			log.Error().Err(err).Msg("failed to encode admin check proxy response")
+		}
+	}
+}
+
+// AdminRecheckDeadProxies re-checks every proxy not currently marked 'alive' right now
+// (see proxypool.Store.RecheckDeadAndUnknown) — the admin dashboard's "Recheck dead &
+// unknown" bulk action, for when you don't want to wait for the hourly sweep.
+func AdminRecheckDeadProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
+	store := proxypool.NewStore(pool)
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+
+		checked, alive, err := store.RecheckDeadAndUnknown(ctx)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to recheck dead/unknown proxies")
+			http.Error(w, `{"error":"failed to recheck proxies"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]int{
+			"checked": checked,
+			"alive":   alive,
+		}); err != nil {
+			log.Error().Err(err).Msg("failed to encode admin recheck proxies response")
+		}
+	}
+}
+
 // AdminDeleteDeadProxies removes every proxy currently marked 'dead' from the pool (see
 // proxypool.Store.DeleteDead) and reports how many were removed.
 func AdminDeleteDeadProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {

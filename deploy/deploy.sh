@@ -80,6 +80,7 @@ run_remote "cd '${DEPLOY_DIR}' && \
 
 echo "Uploading source..."
 tar \
+  --no-xattrs \
   --exclude='.git' \
   --exclude='.env' \
   --exclude='.env.*' \

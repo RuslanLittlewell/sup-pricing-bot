@@ -135,7 +135,7 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	var trackerID string
 	err := pool.QueryRow(ctx, `
 		INSERT INTO trackers (user_id, url, normalized_url, domain, title, initial_price, current_price, currency, current_stock_status, extraction_rule, extraction_confidence, status, check_interval_minutes, next_check_at)
-		VALUES ($1, $2, $2, $3, $4, $5, $5, $6, 'unknown', $7, 0.9, 'active', $8, now() + ($8 * interval '1 minute'))
+		VALUES ($1, $2, $2, $3, $4, $5, $5, $6, 'unknown', $7, 0.9, 'active', $8::int, now() + ($8::int * interval '1 minute'))
 		RETURNING id
 	`, userID, state.URL, extractDomain(state.URL), title, state.InitialPrice, state.Currency, state.Rule, defaultNewTrackerIntervalMinutes).Scan(&trackerID)
 	if err != nil {

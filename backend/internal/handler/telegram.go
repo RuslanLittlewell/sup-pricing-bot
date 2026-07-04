@@ -25,6 +25,27 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
+
+		// Telegram's webhook delivery isn't exactly-once — if it doesn't see our
+		// acknowledgement in time (price extraction below can take 40+ seconds), or for
+		// any other reason on its end, it resends the identical update_id. Recording it
+		// here and bailing out on a duplicate is what actually guarantees a message is
+		// only ever processed once; the immediate flush below just makes that redelivery
+		// less likely in the first place; it isn't a substitute for this check.
+		if update.UpdateID != 0 {
+			tag, err := pool.Exec(r.Context(), `
+				INSERT INTO telegram_processed_updates (update_id) VALUES ($1)
+				ON CONFLICT DO NOTHING
+			`, update.UpdateID)
+			if err != nil {
+				log.Error().Err(err).Int("update_id", update.UpdateID).Msg("failed to record telegram update id")
+			} else if tag.RowsAffected() == 0 {
+				log.Info().Int("update_id", update.UpdateID).Msg("ignoring duplicate telegram update (already processed)")
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
+
 		// Acknowledge Telegram immediately and flush it over the wire before doing any
 		// real work. Without an explicit flush, Go may buffer the response until the
 		// handler returns — and price extraction below can take 40+ seconds (search

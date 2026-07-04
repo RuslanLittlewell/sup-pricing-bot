@@ -11,6 +11,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { formatDate } from '@/lib/utils'
 import {
   Table,
   TableBody,
@@ -120,7 +121,7 @@ export function TrackersPage({
                     <TableCell>
                       <Badge variant="outline">{t.method}</Badge>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{t.timestamp}</TableCell>
+                    <TableCell className="text-muted-foreground">{formatDate(t.timestamp)}</TableCell>
                   </TableRow>
                 ))
               )}
@@ -179,7 +180,7 @@ export function TrackersPage({
                     <TableCell className="max-w-[32rem] whitespace-normal text-destructive">
                       {t.error}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{t.timestamp}</TableCell>
+                    <TableCell className="text-muted-foreground">{formatDate(t.timestamp)}</TableCell>
                     <TableCell className="text-right">
                       <Button
                         type="button"
@@ -204,7 +205,7 @@ export function TrackersPage({
         </CardContent>
       </Card>
 
-      <p className="text-xs text-muted-foreground">Generated {data.generatedAt}</p>
+      <p className="text-xs text-muted-foreground">Generated {formatDate(data.generatedAt)}</p>
     </div>
   )
 }
