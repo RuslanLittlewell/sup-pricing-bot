@@ -13,6 +13,7 @@ import (
 
 	"github.com/littlewell/price-tracker/internal/config"
 	"github.com/littlewell/price-tracker/internal/extractor"
+	"github.com/littlewell/price-tracker/internal/proxypool"
 	"github.com/littlewell/price-tracker/internal/renderer"
 	"github.com/littlewell/price-tracker/internal/telegram"
 )
@@ -262,7 +263,7 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			sendBackMessage(tg, chatID, lang, tr(lang, "enter_link"))
 			return
 		}
-		fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
+		fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy, proxypool.NewStore(pool))
 		startStockTracking(ctx, pool, tg, chatID, userID, lang, state.URL, log, fetcher)
 	case strings.HasPrefix(data, "size:"):
 		state, ok := getTelegramState(ctx, pool, chatID)
@@ -295,7 +296,7 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			return
 		}
 		sendNextPriceCandidate(ctx, pool, tg, chatID, userID, lang, state.URL, state.InitialPrice, state.Currency, state.CandidateIndex+1, log, rend,
-			extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy))
+			extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy, proxypool.NewStore(pool)))
 	case strings.HasPrefix(data, "tracker:delete:"):
 		trackerID := strings.TrimPrefix(data, "tracker:delete:")
 		found, err := deleteTrackerRow(ctx, pool, userID, trackerID)

@@ -1,6 +1,7 @@
 package extractor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/littlewell/price-tracker/internal/proxypool"
 	"github.com/littlewell/price-tracker/internal/renderer"
 	"github.com/littlewell/price-tracker/internal/scraper"
 	"github.com/littlewell/price-tracker/internal/security"
@@ -45,9 +47,13 @@ type PageFetcher struct {
 	renderer   *renderer.Renderer
 	cookies    []scraper.Cookie
 	cfRelay    *CloudflareRelayFetcher
+	proxies    *proxypool.Store
 }
 
-func NewPageFetcher(r *renderer.Renderer, cookiesFile, proxyURL string) *PageFetcher {
+// NewPageFetcher builds a fetcher. proxies may be nil (no pool wired up) — direct fetches
+// then only ever use cookiesFile/proxyURL's static config, with no per-request rotation
+// or per-URL fingerprint memory (see proxies field doc on httpFetch/fetchDirect).
+func NewPageFetcher(r *renderer.Renderer, cookiesFile, proxyURL string, proxies *proxypool.Store) *PageFetcher {
 	cookies, _ := scraper.LoadCookies(cookiesFile)
 
 	var proxy *url.URL
@@ -74,6 +80,7 @@ func NewPageFetcher(r *renderer.Renderer, cookiesFile, proxyURL string) *PageFet
 		renderer: r,
 		cookies:  cookies,
 		cfRelay:  NewCloudflareRelay(),
+		proxies:  proxies,
 	}
 }
 
@@ -92,7 +99,7 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 		}
 	}
 
-	body, err := f.httpFetchWithRetry(url)
+	body, fp, err := f.fetchDirect(url)
 	if err != nil {
 		if !shouldRenderFallback(err) {
 			return nil, "", err
@@ -130,7 +137,26 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 		return []byte(rendered), FetchMethodRender, nil
 	}
 
+	if f.proxies != nil {
+		_ = f.proxies.SaveFingerprint(context.Background(), url, fp)
+	}
 	return body, FetchMethodDirect, nil
+}
+
+// fetchDirect tries the (User-Agent, proxy) pairing that last worked for this exact URL
+// first, if one is remembered — cheaper than a fresh random gamble, and the whole point
+// of remembering it. Falls through to random attempts when there's nothing saved, or the
+// saved pairing no longer works (the proxy could have gone dead, or the site could have
+// started blocking it since).
+func (f *PageFetcher) fetchDirect(url string) ([]byte, proxypool.FetchFingerprint, error) {
+	if f.proxies != nil {
+		if saved, ok := f.proxies.GetFingerprint(context.Background(), url); ok {
+			if body, fp, err := f.httpFetch(url, &saved); err == nil && !isBotChallenge(body) {
+				return body, fp, nil
+			}
+		}
+	}
+	return f.httpFetchWithRetry(url)
 }
 
 // fetchViaRelay tries the Cloudflare Worker relay (see cloudflare-relay/) — a different
@@ -155,14 +181,16 @@ func (f *PageFetcher) fetchViaRelay(url string) ([]byte, error) {
 // httpFetchWithRetry retries transient-looking failures (timeouts, and status codes
 // that could be a momentary rate-limit rather than a hard block) a couple of times with
 // jittered backoff before giving up. This is cheap relative to falling back to the
-// headless renderer, and some bot-detection systems only trip on request bursts.
-func (f *PageFetcher) httpFetchWithRetry(url string) ([]byte, error) {
+// headless renderer, and some bot-detection systems only trip on request bursts. Each
+// attempt gets a fresh random (User-Agent, proxy) pick (see pickForAttempt) — a retry
+// that reused the same identity that just failed would be pointless.
+func (f *PageFetcher) httpFetchWithRetry(url string) ([]byte, proxypool.FetchFingerprint, error) {
 	const maxAttempts = 3
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		body, err := f.httpFetch(url)
+		body, fp, err := f.httpFetch(url, nil)
 		if err == nil {
-			return body, nil
+			return body, fp, nil
 		}
 		lastErr = err
 		if attempt == maxAttempts || !shouldRenderFallback(err) {
@@ -171,16 +199,61 @@ func (f *PageFetcher) httpFetchWithRetry(url string) ([]byte, error) {
 		backoff := time.Duration(300*attempt)*time.Millisecond + time.Duration(rand.Intn(300))*time.Millisecond
 		time.Sleep(backoff)
 	}
-	return nil, lastErr
+	return nil, proxypool.FetchFingerprint{}, lastErr
 }
 
-func (f *PageFetcher) httpFetch(url string) ([]byte, error) {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+// pickForAttempt returns the browser profile and proxy to use for one fetch attempt.
+// forced replays a previously-successful pairing verbatim (falling back to a random
+// profile only if that exact User-Agent is no longer in the pool, e.g. after a deploy
+// trims it); nil forced means pick fresh — a random profile, and a random alive proxy
+// from the pool if one is wired up and available.
+func (f *PageFetcher) pickForAttempt(forced *proxypool.FetchFingerprint) (useragent.Profile, proxypool.PickedProxy) {
+	if forced != nil {
+		profile, ok := useragent.ByUserAgent(forced.UserAgent)
+		if !ok {
+			profile = useragent.Random()
+		}
+		return profile, forced.Proxy
 	}
 
 	profile := useragent.Random()
+	var proxy proxypool.PickedProxy
+	if f.proxies != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if picked, ok := f.proxies.Pick(ctx); ok {
+			proxy = picked
+		}
+	}
+	return profile, proxy
+}
+
+// clientFor returns the http.Client to issue the request through: a fresh uTLS client
+// dialing via proxy's http:// CONNECT endpoint (see PickedProxy.HTTPURL's doc comment for
+// why http:// rather than socks5:// even though the pool stores them as SOCKS5), or the
+// statically-configured client from NewPageFetcher when no per-request proxy was picked.
+func (f *PageFetcher) clientFor(proxy proxypool.PickedProxy) *http.Client {
+	if proxy.Address == "" {
+		return f.httpClient
+	}
+	proxyURL, err := url.Parse(proxy.HTTPURL())
+	if err != nil {
+		return f.httpClient
+	}
+	return &http.Client{
+		Timeout:       requestTimeout,
+		Transport:     newUTLSRoundTripper(proxyURL),
+		CheckRedirect: f.httpClient.CheckRedirect,
+	}
+}
+
+func (f *PageFetcher) httpFetch(url string, forced *proxypool.FetchFingerprint) ([]byte, proxypool.FetchFingerprint, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, proxypool.FetchFingerprint{}, fmt.Errorf("create request: %w", err)
+	}
+
+	profile, proxy := f.pickForAttempt(forced)
 	req.Header.Set("User-Agent", profile.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7")
@@ -198,23 +271,23 @@ func (f *PageFetcher) httpFetch(url string) ([]byte, error) {
 		req.Header.Set("Cookie", cookieHeader)
 	}
 
-	resp, err := f.httpClient.Do(req)
+	resp, err := f.clientFor(proxy).Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http request failed: %w", err)
+		return nil, proxypool.FetchFingerprint{}, fmt.Errorf("http request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, proxypool.FetchFingerprint{}, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	reader := io.LimitReader(resp.Body, maxBodySize)
 	body, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
+		return nil, proxypool.FetchFingerprint{}, fmt.Errorf("read body: %w", err)
 	}
 
-	return body, nil
+	return body, proxypool.FetchFingerprint{UserAgent: profile.UserAgent, Proxy: proxy}, nil
 }
 
 func isBotChallenge(body []byte) bool {

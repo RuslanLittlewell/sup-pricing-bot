@@ -66,7 +66,7 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 			return true
 		}
 		if hasState && state.Step == "awaiting_url_stock" {
-			fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
+			fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy, proxypool.NewStore(pool))
 			startStockTracking(ctx, pool, tg, chatID, userID, lang, normalized, log, fetcher)
 			return true
 		}
@@ -116,7 +116,7 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 			Str("currency", currency).
 			Msg("telegram price input accepted")
 		sendNextPriceCandidate(ctx, pool, tg, chatID, userID, lang, state.URL, price, currency, 0, log, rend,
-			extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy))
+			extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy, proxypool.NewStore(pool)))
 		return true
 	case "awaiting_confirm":
 		switch lowered {
@@ -142,7 +142,7 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 				Int("candidate_index", state.CandidateIndex).
 				Msg("telegram price candidate rejected")
 			sendNextPriceCandidate(ctx, pool, tg, chatID, userID, lang, state.URL, state.InitialPrice, state.Currency, state.CandidateIndex+1, log, rend,
-				extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy))
+				extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy, proxypool.NewStore(pool)))
 			return true
 		default:
 			markup := makeInlineKeyboard(

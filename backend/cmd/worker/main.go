@@ -58,7 +58,7 @@ func main() {
 	defer trackerTicker.Stop()
 	defer notifTicker.Stop()
 
-	fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy)
+	fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy, proxypool.NewStore(pool))
 	attributeExtractor := extractor.NewAttribute()
 	genericExtractor := extractor.NewGeneric()
 	proxyStore := proxypool.NewStore(pool)
@@ -85,6 +85,7 @@ func main() {
 	// seconds even with bounded concurrency — long enough that folding it into the
 	// tracker/notification ticks would delay them.
 	go runProxyPoolRefresher(ctx, pool, log)
+	go runGeonodeFetcher(ctx, pool, log)
 
 	for {
 		select {
@@ -109,6 +110,26 @@ func runProxyPoolRefresher(ctx context.Context, pool *pgxpool.Pool, log zerolog.
 		select {
 		case <-ticker.C:
 			store.Refresh(ctx, log)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// runGeonodeFetcher pulls geonode.com's free public proxy list into the pool hourly (see
+// Store.FetchGeonode) — a separate ticker from runProxyPoolRefresher's aliveness sweep
+// since the two do unrelated work (discovering new proxies vs. re-checking known ones)
+// and there's no reason to couple their schedules.
+func runGeonodeFetcher(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger) {
+	store := proxypool.NewStore(pool)
+	store.FetchGeonode(ctx, log)
+
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			store.FetchGeonode(ctx, log)
 		case <-ctx.Done():
 			return
 		}

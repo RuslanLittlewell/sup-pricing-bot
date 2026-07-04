@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -32,6 +33,36 @@ func CheckAlive(ctx context.Context, address string, auth *proxy.Auth) bool {
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
 			DialContext:         contextDialer.DialContext,
+			TLSHandshakeTimeout: 8 * time.Second,
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, aliveCheckURL, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 400
+}
+
+// CheckAliveHTTP is CheckAlive's counterpart for an HTTP(S) forward proxy (CONNECT-style)
+// instead of SOCKS5 — needed for proxy sources that hand out plain HTTP proxies (see
+// FetchGeonode), which a SOCKS5 dial can't talk to at all. username may be empty for an
+// unauthenticated proxy.
+func CheckAliveHTTP(ctx context.Context, address, username, password string) bool {
+	proxyURL := &url.URL{Scheme: "http", Host: address}
+	if username != "" {
+		proxyURL.User = url.UserPassword(username, password)
+	}
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy:               http.ProxyURL(proxyURL),
 			TLSHandshakeTimeout: 8 * time.Second,
 		},
 	}

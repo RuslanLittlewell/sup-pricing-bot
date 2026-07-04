@@ -118,8 +118,10 @@ func sendModeMenu(tg *telegram.Client, chatID int64, lang, text string) {
 }
 
 // intervalOptions are the selectable scan frequencies (minutes), ascending. Only those
-// >= the user's plan minimum are shown, so e.g. Free never sees the 30m/1h buttons.
-var intervalOptions = []int{30, 60, 180, 300, 1440}
+// >= the user's plan minimum are shown, so e.g. Free never sees the 30m/1h buttons — the
+// 5-minute option in particular only ever shows up for the internal 'admin' plan (see
+// migrationV19), no paid tier goes that fast.
+var intervalOptions = []int{5, 30, 60, 180, 300, 1440}
 
 func sendIntervalMenu(tg *telegram.Client, chatID int64, lang, trackerID, text string, minInterval int) {
 	var row []inlineButton

@@ -101,6 +101,16 @@ var Migrations = []Migration{
 		Description: "add one-time trial plan",
 		SQL:         migrationV17,
 	},
+	{
+		Version:     18,
+		Description: "remember the user-agent/proxy pairing that last succeeded per URL",
+		SQL:         migrationV18,
+	},
+	{
+		Version:     19,
+		Description: "add internal admin plan (effectively unlimited trackers, 5-minute scans)",
+		SQL:         migrationV19,
+	},
 }
 
 const migrationV1 = `
@@ -482,6 +492,35 @@ ALTER TABLE user_plans ADD COLUMN IF NOT EXISTS trial_used BOOLEAN NOT NULL DEFA
 
 INSERT INTO plans (code, name, max_trackers, check_interval_minutes, price_history_days, is_paid)
 VALUES ('trial', 'Trial', 10, 60, 90, false)
+ON CONFLICT (code) DO UPDATE SET
+    name = EXCLUDED.name,
+    max_trackers = EXCLUDED.max_trackers,
+    check_interval_minutes = EXCLUDED.check_interval_minutes,
+    price_history_days = EXCLUDED.price_history_days,
+    is_paid = EXCLUDED.is_paid;
+`
+
+const migrationV18 = `
+CREATE TABLE IF NOT EXISTS scrape_fingerprints (
+    url TEXT PRIMARY KEY,
+    user_agent TEXT NOT NULL,
+    proxy_address TEXT,
+    proxy_username TEXT,
+    proxy_password TEXT,
+    success_count INT NOT NULL DEFAULT 1,
+    last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+`
+
+// migrationV19 seeds an internal 'admin' plan — not offered in /plans (see
+// sendPlansMenu's fixed plan list), only ever granted directly via a DB update for
+// specific users. Effectively-unlimited trackers, and a 5-minute scan interval faster
+// than any paid tier, for testing/operating the bot without plan limits getting in the way.
+const migrationV19 = `
+INSERT INTO plans (code, name, max_trackers, check_interval_minutes, price_history_days, is_paid)
+VALUES ('admin', 'Admin', 9999, 5, 365, false)
 ON CONFLICT (code) DO UPDATE SET
     name = EXCLUDED.name,
     max_trackers = EXCLUDED.max_trackers,
