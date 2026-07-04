@@ -331,6 +331,16 @@ func shouldRenderFallback(err error) bool {
 		"unexpected status code: 520",
 		"unexpected status code: 521",
 		"unexpected status code: 522",
+		// A dead/unreachable proxy (or its CONNECT tunnel dying mid-handshake) fails
+		// here, not with an HTTP status — utls_transport.go wraps every such failure
+		// with one of these two prefixes regardless of the underlying OS error text
+		// (i/o timeout, connection refused, unexpected EOF, ...), so matching the
+		// prefix catches all of them without having to enumerate each one. Without
+		// this, a single bad proxy pick would abort the whole fetch on attempt one
+		// instead of retrying with a different proxy (see httpFetchWithRetry) or
+		// falling through to the cf_relay/render tiers.
+		"utls dial:",
+		"utls handshake:",
 	}
 	for _, indicator := range indicators {
 		if strings.Contains(msg, indicator) {

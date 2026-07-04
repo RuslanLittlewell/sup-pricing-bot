@@ -167,11 +167,86 @@ func (s *Store) addDiscovered(ctx context.Context, entries []DiscoveredEntry) (a
 	return added, nil
 }
 
+// checkOneProxyAlive dispatches to the right aliveness check for a proxy's protocol —
+// shared by the hourly sweep (checkAllAliveness) and the admin dashboard's single-proxy
+// "ping" action (Store.CheckOne).
+func checkOneProxyAlive(ctx context.Context, protocol, address, username, password string) bool {
+	if protocol == "http" || protocol == "https" {
+		return CheckAliveHTTP(ctx, address, username, password)
+	}
+	var auth *xproxy.Auth
+	if username != "" {
+		auth = &xproxy.Auth{User: username, Password: password}
+	}
+	return CheckAlive(ctx, address, auth)
+}
+
+// CheckOne re-checks one proxy's aliveness immediately (rather than waiting for the next
+// hourly sweep — see Refresh) and persists the result, for the admin dashboard's
+// per-proxy "ping" action. Returns its address (for the caller's response) and whether it
+// answered alive.
+func (s *Store) CheckOne(ctx context.Context, id string) (address string, alive bool, err error) {
+	var protocol string
+	var username, password *string
+	err = s.pool.QueryRow(ctx, `SELECT address, protocol, username, password FROM proxies WHERE id = $1`, id).
+		Scan(&address, &protocol, &username, &password)
+	if err != nil {
+		return "", false, err
+	}
+
+	u, p := "", ""
+	if username != nil {
+		u = *username
+	}
+	if password != nil {
+		p = *password
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	alive = checkOneProxyAlive(checkCtx, protocol, address, u, p)
+	cancel()
+
+	status := "dead"
+	if alive {
+		status = "alive"
+	}
+	if _, execErr := s.pool.Exec(ctx, `
+		UPDATE proxies SET status = $2, last_checked_at = now(), updated_at = now() WHERE id = $1
+	`, id, status); execErr != nil {
+		return address, alive, execErr
+	}
+	return address, alive, nil
+}
+
 func (s *Store) checkAllAliveness(ctx context.Context, log zerolog.Logger) {
-	rows, err := s.pool.Query(ctx, `SELECT id, address, protocol, username, password FROM proxies`)
+	checked, alive, err := s.recheckProxies(ctx, `SELECT id, address, protocol, username, password FROM proxies`)
 	if err != nil {
 		log.Error().Err(err).Msg("proxypool: failed to list proxies for aliveness check")
 		return
+	}
+	log.Info().Int("alive", alive).Int("dead", checked-alive).Msg("proxypool: aliveness check complete")
+}
+
+// RecheckDeadAndUnknown re-checks every proxy not currently marked 'alive' (i.e. 'dead',
+// or 'unknown' because it's never been checked yet) right now, instead of waiting for the
+// next hourly sweep (see Refresh) — the admin dashboard's "Recheck dead & unknown" bulk
+// action. Already-alive proxies are skipped: re-confirming those doesn't tell us anything
+// we don't already believe.
+func (s *Store) RecheckDeadAndUnknown(ctx context.Context) (checked, alive int, err error) {
+	return s.recheckProxies(ctx, `
+		SELECT id, address, protocol, username, password FROM proxies WHERE status != 'alive'
+	`)
+}
+
+// recheckProxies runs the concurrent aliveness check (see checkOneProxyAlive) against
+// whatever set of proxies query selects (must return id, address, protocol, username,
+// password, in that order) and persists each result — shared by the hourly sweep
+// (checkAllAliveness) and the admin dashboard's on-demand bulk recheck
+// (RecheckDeadAndUnknown), which only differ in which proxies they target.
+func (s *Store) recheckProxies(ctx context.Context, query string, args ...any) (checked, alive int, err error) {
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return 0, 0, err
 	}
 	type entry struct {
 		id, address, protocol string
@@ -189,7 +264,7 @@ func (s *Store) checkAllAliveness(ctx context.Context, log zerolog.Logger) {
 
 	sem := make(chan struct{}, maxAliveCheckConcurrency)
 	var wg sync.WaitGroup
-	var aliveCount, deadCount int
+	var aliveCount int
 	var mu sync.Mutex
 
 	for _, e := range all {
@@ -208,16 +283,7 @@ func (s *Store) checkAllAliveness(ctx context.Context, log zerolog.Logger) {
 			}
 
 			checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			var alive bool
-			if e.protocol == "http" || e.protocol == "https" {
-				alive = CheckAliveHTTP(checkCtx, e.address, username, password)
-			} else {
-				var auth *xproxy.Auth
-				if username != "" {
-					auth = &xproxy.Auth{User: username, Password: password}
-				}
-				alive = CheckAlive(checkCtx, e.address, auth)
-			}
+			alive := checkOneProxyAlive(checkCtx, e.protocol, e.address, username, password)
 			cancel()
 
 			status := "dead"
@@ -227,8 +293,6 @@ func (s *Store) checkAllAliveness(ctx context.Context, log zerolog.Logger) {
 			mu.Lock()
 			if alive {
 				aliveCount++
-			} else {
-				deadCount++
 			}
 			mu.Unlock()
 
@@ -240,7 +304,7 @@ func (s *Store) checkAllAliveness(ctx context.Context, log zerolog.Logger) {
 	}
 	wg.Wait()
 
-	log.Info().Int("alive", aliveCount).Int("dead", deadCount).Msg("proxypool: aliveness check complete")
+	return len(all), aliveCount, nil
 }
 
 // Pick returns a currently-alive proxy, chosen at random, and records the pick

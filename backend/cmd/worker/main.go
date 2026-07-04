@@ -300,22 +300,11 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 		`, id, oldPriceParam, newPrice, newCurrency)
 	}
 
-	var prevStockStatus string
-	pool.QueryRow(ctx, `SELECT previous_stock_status FROM trackers WHERE id = $1`, id).Scan(&prevStockStatus)
-	if prevStockStatus != "" && prevStockStatus != stockStatus {
-		notifType := "stock_changed"
-		if stockStatus == "in_stock" {
-			notifType = "back_in_stock"
-		} else if stockStatus == "out_of_stock" {
-			notifType = "out_of_stock"
-		}
-		pool.Exec(ctx, `
-			INSERT INTO notifications (id, user_id, tracker_id, type, old_stock_status, new_stock_status, currency, status)
-			SELECT gen_random_uuid(), user_id, $1, $2, $3, $4, $5, 'pending'
-			FROM trackers WHERE id = $1
-		`, id, notifType, prevStockStatus, stockStatus, newCurrency)
-	}
-
+	// stockStatus/stock_points above are just incidental telemetry — most price
+	// extractors (JSON-LD in particular) read an availability field alongside price
+	// whether the user asked for it or not. This is a price tracker: deliberately not
+	// comparing against previous_stock_status here, unlike processStockTracker, so a
+	// user who only asked to track price never gets a "back in stock" notification.
 	log.Info().Str("tracker_id", id).Float64("price", newPrice).Msg("tracker checked successfully")
 }
 

@@ -116,6 +116,11 @@ var Migrations = []Migration{
 		Description: "track a pending message to auto-clean up if the user moves on to something else",
 		SQL:         migrationV20,
 	},
+	{
+		Version:     21,
+		Description: "record processed telegram update IDs to reject Telegram's own webhook retries",
+		SQL:         migrationV21,
+	},
 }
 
 const migrationV1 = `
@@ -540,6 +545,18 @@ ON CONFLICT (code) DO UPDATE SET
 // else instead of tapping one of its buttons.
 const migrationV20 = `
 ALTER TABLE telegram_states ADD COLUMN IF NOT EXISTS pending_message_id INT;
+`
+
+// migrationV21 records every Telegram update_id we've started processing. Telegram's own
+// webhook delivery isn't exactly-once — if it doesn't see our acknowledgement in time (or
+// for any other reason on its end), it resends the identical update, which without this
+// would be processed a second time (e.g. creating a duplicate tracker from one price
+// confirmation). See TelegramWebhook's dedup check.
+const migrationV21 = `
+CREATE TABLE IF NOT EXISTS telegram_processed_updates (
+    update_id BIGINT PRIMARY KEY,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {

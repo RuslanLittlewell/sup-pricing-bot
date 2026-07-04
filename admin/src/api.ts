@@ -144,6 +144,43 @@ export function fetchProxies(creds: Credentials): Promise<AdminProxy[]> {
   return adminGet('/api/admin/proxies', creds)
 }
 
+export async function checkProxy(
+  creds: Credentials,
+  id: string,
+): Promise<{ address: string; alive: boolean }> {
+  const res = await fetch(`${API_URL}/api/admin/proxies/${encodeURIComponent(id)}/check`, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+    },
+  })
+  if (res.status === 401) {
+    throw new UnauthorizedError('Invalid username or password')
+  }
+  if (!res.ok) {
+    throw new Error(`POST /api/admin/proxies/${id}/check failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function recheckDeadProxies(
+  creds: Credentials,
+): Promise<{ checked: number; alive: number }> {
+  const res = await fetch(`${API_URL}/api/admin/proxies/recheck`, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+    },
+  })
+  if (res.status === 401) {
+    throw new UnauthorizedError('Invalid username or password')
+  }
+  if (!res.ok) {
+    throw new Error(`POST /api/admin/proxies/recheck failed: ${res.status}`)
+  }
+  return res.json()
+}
+
 export async function deleteDeadProxies(creds: Credentials): Promise<{ removed: number }> {
   const res = await fetch(`${API_URL}/api/admin/proxies/dead`, {
     method: 'DELETE',

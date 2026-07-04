@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react'
 import { fetchUserTrackers, type UserTracker, type Credentials } from '@/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { formatDate } from '@/lib/utils'
 import {
   Table,
   TableBody,
@@ -170,9 +171,9 @@ export function UserTrackersPage({
                           ) : null}
                         </div>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{t.createdAt}</TableCell>
+                      <TableCell className="text-muted-foreground">{formatDate(t.createdAt)}</TableCell>
                       <TableCell className="text-muted-foreground">
-                        {t.lastCheckedAt ?? '—'}
+                        {formatDate(t.lastCheckedAt)}
                       </TableCell>
                     </TableRow>
                   ))
