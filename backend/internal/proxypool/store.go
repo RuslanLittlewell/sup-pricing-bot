@@ -277,13 +277,19 @@ type FetchFingerprint struct {
 
 // GetFingerprint returns the last combination that successfully fetched this exact URL,
 // if any — so a repeat scrape (e.g. the next scheduled price check) can retry what's
-// already known to work before gambling on a fresh random pick.
+// already known to work before gambling on a fresh random pick. If the saved proxy has
+// since been marked dead by the hourly aliveness check, this returns ok=false rather than
+// handing back a pairing already known not to work — the caller falls straight through to
+// a fresh pick instead of wasting a request (and its timeout) on a proxy we already know
+// is gone, even though a saved fingerprint exists for this URL.
 func (s *Store) GetFingerprint(ctx context.Context, url string) (FetchFingerprint, bool) {
 	var fp FetchFingerprint
 	var proxyAddress, proxyUsername, proxyPassword *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT user_agent, proxy_address, proxy_username, proxy_password
-		FROM scrape_fingerprints WHERE url = $1
+		SELECT sf.user_agent, sf.proxy_address, sf.proxy_username, sf.proxy_password
+		FROM scrape_fingerprints sf
+		LEFT JOIN proxies p ON p.address = sf.proxy_address
+		WHERE sf.url = $1 AND (sf.proxy_address IS NULL OR p.status = 'alive')
 	`, url).Scan(&fp.UserAgent, &proxyAddress, &proxyUsername, &proxyPassword)
 	if err != nil {
 		return FetchFingerprint{}, false
@@ -325,6 +331,19 @@ func (s *Store) SaveFingerprint(ctx context.Context, url string, fp FetchFingerp
 			updated_at = now()
 	`, url, fp.UserAgent, proxyAddress, proxyUsername, proxyPassword)
 	return err
+}
+
+// DeleteDead removes every proxy currently marked 'dead' (see checkAllAliveness) from the
+// pool — for the admin dashboard's "delete dead proxies" action, so a pool that's
+// accumulated a lot of no-longer-usable public/free entries (see FetchGeonode) can be
+// pruned by hand instead of waiting for a source to naturally stop listing them. 'unknown'
+// (never yet checked) proxies are left alone — they haven't failed anything yet.
+func (s *Store) DeleteDead(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM proxies WHERE status = 'dead'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // List returns every proxy in the pool for the admin dashboard, most recently used first.

@@ -144,6 +144,22 @@ export function fetchProxies(creds: Credentials): Promise<AdminProxy[]> {
   return adminGet('/api/admin/proxies', creds)
 }
 
+export async function deleteDeadProxies(creds: Credentials): Promise<{ removed: number }> {
+  const res = await fetch(`${API_URL}/api/admin/proxies/dead`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+    },
+  })
+  if (res.status === 401) {
+    throw new UnauthorizedError('Invalid username or password')
+  }
+  if (!res.ok) {
+    throw new Error(`DELETE /api/admin/proxies/dead failed: ${res.status}`)
+  }
+  return res.json()
+}
+
 export function deleteFailedTracker(
   creds: Credentials,
   item: Pick<FailedTracker, 'id' | 'kind'>,

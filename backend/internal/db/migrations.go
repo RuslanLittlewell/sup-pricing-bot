@@ -111,6 +111,11 @@ var Migrations = []Migration{
 		Description: "add internal admin plan (effectively unlimited trackers, 5-minute scans)",
 		SQL:         migrationV19,
 	},
+	{
+		Version:     20,
+		Description: "track a pending message to auto-clean up if the user moves on to something else",
+		SQL:         migrationV20,
+	},
 }
 
 const migrationV1 = `
@@ -527,6 +532,14 @@ ON CONFLICT (code) DO UPDATE SET
     check_interval_minutes = EXCLUDED.check_interval_minutes,
     price_history_days = EXCLUDED.price_history_days,
     is_paid = EXCLUDED.is_paid;
+`
+
+// migrationV20 adds a slot to remember one "still showing, but no longer relevant"
+// message per chat — currently only the post-tracker-creation interval picker (see
+// sendPostCreateIntervalPrompt) — so it can be deleted the moment the user does anything
+// else instead of tapping one of its buttons.
+const migrationV20 = `
+ALTER TABLE telegram_states ADD COLUMN IF NOT EXISTS pending_message_id INT;
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {

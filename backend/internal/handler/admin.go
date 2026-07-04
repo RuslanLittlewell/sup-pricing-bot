@@ -329,6 +329,28 @@ func AdminProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
 	}
 }
 
+// AdminDeleteDeadProxies removes every proxy currently marked 'dead' from the pool (see
+// proxypool.Store.DeleteDead) and reports how many were removed.
+func AdminDeleteDeadProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
+	store := proxypool.NewStore(pool)
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+
+		removed, err := store.DeleteDead(ctx)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to delete dead proxies")
+			http.Error(w, `{"error":"failed to delete dead proxies"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]int64{"removed": removed}); err != nil {
+			log.Error().Err(err).Msg("failed to encode admin delete dead proxies response")
+		}
+	}
+}
+
 // AdminTrackers serves the trackers page: which tracked links resolved through a paid
 // search fallback (and which one), and which are currently failing to extract at all —
 // each row naming the owning user, so a failure or fallback usage can be traced back to

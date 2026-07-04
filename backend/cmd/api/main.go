@@ -133,6 +133,7 @@ func main() {
 			r.Get("/trackers", handler.AdminTrackers(pool, log))
 			r.Delete("/trackers/failed/{kind}/{id}", handler.AdminDeleteFailedTracker(pool, log))
 			r.Get("/proxies", handler.AdminProxies(pool, log))
+			r.Delete("/proxies/dead", handler.AdminDeleteDeadProxies(pool, log))
 		})
 	})
 

@@ -127,6 +127,42 @@ type sentMessage struct {
 	MessageID int `json:"message_id"`
 }
 
+// SendMessageWithMarkupGetID is SendMessageWithMarkup's counterpart for callers that need
+// the sent message's ID back (e.g. to delete it later — see DeleteMessage).
+func (c *Client) SendMessageWithMarkupGetID(chatID int64, text string, replyMarkup json.RawMessage) (int, error) {
+	body := SendMessageRequest{
+		ChatID:      chatID,
+		Text:        text,
+		ParseMode:   "HTML",
+		ReplyMarkup: replyMarkup,
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return 0, fmt.Errorf("marshal request: %w", err)
+	}
+
+	resp, err := c.client.Post(c.BaseURL()+"/sendMessage", "application/json", bytes.NewReader(data))
+	if err != nil {
+		return 0, fmt.Errorf("send message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var apiResp APIResponse
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		return 0, fmt.Errorf("parse response: %w", err)
+	}
+	if !apiResp.Ok {
+		return 0, fmt.Errorf("telegram api error: %s", apiResp.Description)
+	}
+
+	var sent sentMessage
+	if err := json.Unmarshal(apiResp.Result, &sent); err != nil {
+		return 0, fmt.Errorf("parse sent message: %w", err)
+	}
+	return sent.MessageID, nil
+}
+
 // SendMessageGetID sends a plain text message and returns its message_id, so a later
 // EditMessageText call can update it in place (e.g. a progress notice during a slow
 // operation) instead of sending a new message.
