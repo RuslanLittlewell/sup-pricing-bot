@@ -20,6 +20,7 @@ import (
 	"github.com/littlewell/price-tracker/internal/notifier"
 	"github.com/littlewell/price-tracker/internal/proxypool"
 	"github.com/littlewell/price-tracker/internal/renderer"
+	"github.com/littlewell/price-tracker/internal/shops"
 	"github.com/littlewell/price-tracker/internal/telegram"
 )
 
@@ -341,6 +342,30 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 		}
 		price, currency, stockStatus, extractionMethod, err := finalizePriceResult(result, fallbackCurrency, referencePrice)
 		return price, currency, stockStatus, extractionMethod, "", err
+	}
+
+	if ruleType == "zara_price" {
+		// Re-read the page's own lowest-displayed-price nodes fresh (see
+		// shops.ParseZaraPrice) rather than replaying a saved CSS selector — a fixed
+		// selector would keep pointing at whichever specific price node it originally
+		// matched (risking the same "locked onto the crossed-out original price" bug
+		// this rule type exists to avoid) even after the page's discount layout changes.
+		body, fetchMethod, err := fetcher.Fetch(url)
+		if err != nil {
+			return 0, "", "", "", "", fmt.Errorf("fetch failed: %w", err)
+		}
+		priceStr, currency, ok := shops.ParseZaraPrice(body)
+		if !ok {
+			return 0, "", "", "", "", fmt.Errorf("no zara price found on page")
+		}
+		price, err := strconv.ParseFloat(priceStr, 64)
+		if err != nil {
+			return 0, "", "", "", "", fmt.Errorf("parse zara price %q: %w", priceStr, err)
+		}
+		if currency == "" {
+			currency = fallbackCurrency
+		}
+		return price, currency, "unknown", "zara_price", fetchMethod, nil
 	}
 
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {

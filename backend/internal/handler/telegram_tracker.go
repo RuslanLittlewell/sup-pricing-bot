@@ -57,7 +57,13 @@ func enforceTrackerLimit(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 	return true
 }
 
-func updateTrackerInterval(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, trackerID string, minutes int, log zerolog.Logger) {
+// updateTrackerInterval saves the new scan interval. messageID identifies the
+// interval-picker message the user tapped a button on (0 when the interval instead came
+// from typing a number as free text, which has no picker message to clean up) — on
+// success from a button tap, that picker message is just deleted instead of sending a new
+// confirmation with more buttons, so picking an interval doesn't reprint the whole
+// tracker list underneath it.
+func updateTrackerInterval(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, trackerID string, minutes, messageID int, log zerolog.Logger) {
 	if minutes > 1440 {
 		minutes = 1440
 	}
@@ -94,6 +100,12 @@ func updateTrackerInterval(ctx context.Context, pool *pgxpool.Pool, tg *telegram
 	}
 	if tag.RowsAffected() == 0 {
 		SendTelegramMessage(tg, chatID, tr(lang, "tracker_not_found"))
+		return
+	}
+	if messageID != 0 {
+		if err := tg.DeleteMessage(chatID, messageID); err != nil {
+			log.Warn().Err(err).Int("message_id", messageID).Msg("failed to delete interval picker message")
+		}
 		return
 	}
 	markup := makeInlineKeyboard(

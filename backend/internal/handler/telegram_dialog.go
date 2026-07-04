@@ -13,6 +13,7 @@ import (
 	"github.com/littlewell/price-tracker/internal/extractor"
 	"github.com/littlewell/price-tracker/internal/proxypool"
 	"github.com/littlewell/price-tracker/internal/renderer"
+	"github.com/littlewell/price-tracker/internal/shops"
 	"github.com/littlewell/price-tracker/internal/telegram"
 )
 
@@ -158,7 +159,7 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 			sendIntervalMenu(tg, chatID, lang, state.URL, tr(lang, "interval_invalid"), getPlanLimits(ctx, pool, userID).minIntervalMinutes)
 			return true
 		}
-		updateTrackerInterval(ctx, pool, tg, chatID, userID, lang, state.URL, interval, log)
+		updateTrackerInterval(ctx, pool, tg, chatID, userID, lang, state.URL, interval, 0, log)
 		clearTelegramState(ctx, pool, chatID)
 		return true
 	}
@@ -180,6 +181,58 @@ func notifyStillSearching(tg *telegram.Client, chatID int64, statusMsgID int, la
 		}
 	}
 	SendTelegramMessage(tg, chatID, text)
+}
+
+// tryZaraPriceCandidate reads Zara's own reliably-lowest displayed price (see
+// shops.ParseZaraPrice) and offers it for the user's yes/no confirmation, exactly like a
+// found screenshot candidate — but without ever trusting a text search that could land on
+// a crossed-out reference price instead of the real one. Returns false (caller falls
+// through to the normal screenshot/text-search flow) when the fetch fails or the page
+// simply has no data-currency price nodes, rather than guessing.
+func tryZaraPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, fallbackCurrency string, log zerolog.Logger, fetcher *extractor.PageFetcher) bool {
+	if fetcher == nil {
+		return false
+	}
+	body, _, err := fetcher.Fetch(url)
+	if err != nil {
+		log.Warn().Err(err).Str("url", url).Msg("zara price candidate: fetch failed")
+		return false
+	}
+	priceStr, currency, ok := shops.ParseZaraPrice(body)
+	if !ok {
+		return false
+	}
+	price, _, ok := parsePriceInput(priceStr)
+	if !ok {
+		return false
+	}
+	if currency == "" {
+		currency = fallbackCurrency
+	}
+
+	rule, _ := json.Marshal(map[string]string{"type": "zara_price"})
+	if _, err := pool.Exec(ctx, `
+		UPDATE telegram_states
+		SET step = 'awaiting_confirm', initial_price = $2, currency = $3, candidate_index = 0, rule = $4, updated_at = now()
+		WHERE telegram_id = $1
+	`, chatID, price, currency, rule); err != nil {
+		log.Error().Err(err).Msg("failed to save zara price candidate state")
+		return false
+	}
+
+	log.Info().
+		Int64("telegram_id", chatID).
+		Str("user_id", userID).
+		Str("url", url).
+		Float64("price", price).
+		Str("currency", currency).
+		Msg("telegram zara price candidate found")
+
+	markup := makeInlineKeyboard(
+		[]inlineButton{button(tr(lang, "button_yes"), "candidate:yes"), button(tr(lang, "button_no"), "candidate:no")},
+	)
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "candidate_text_caption"), price, currency), markup)
+	return true
 }
 
 // sendTextPriceCandidate is the no-screenshot fallback for sendNextPriceCandidate. It
@@ -305,6 +358,16 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	if rend == nil {
 		SendTelegramMessage(tg, chatID, tr(lang, "search_unavailable"))
 		clearTelegramState(ctx, pool, chatID)
+		return
+	}
+
+	// Zara pages showing a discounted item stack several prices in one place (original,
+	// 30-day-low, current), and rend.FindPriceBlock below just hunts the page for
+	// whatever text matches the number the user typed — it has no way to tell that a
+	// visually-similar node is actually the crossed-out original price, not the current
+	// one. shops.ParseZaraPrice reads the same reliably-lowest price directly instead, so
+	// try that first rather than gambling on text matching for this site.
+	if index == 0 && shops.IsZaraURL(url) && tryZaraPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, currency, log, fetcher) {
 		return
 	}
 
