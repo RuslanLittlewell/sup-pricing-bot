@@ -71,6 +71,8 @@ services:
       SERPER_API_KEY: ${SERPER_API_KEY:-}
       SERPAPI_KEY: ${SERPAPI_KEY:-}
       SERPAPI_KEY_2: ${SERPAPI_KEY_2:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     volumes:
@@ -107,6 +109,8 @@ services:
       SERPER_API_KEY: ${SERPER_API_KEY:-}
       SERPAPI_KEY: ${SERPAPI_KEY:-}
       SERPAPI_KEY_2: ${SERPAPI_KEY_2:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-}
     volumes:
       - ./secrets/scraper-cookies.json:/run/secrets/scraper-cookies.json:ro
     depends_on:
