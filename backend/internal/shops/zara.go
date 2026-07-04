@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -68,6 +70,36 @@ func ParseZaraSizes(htmlContent []byte) ([]ZaraSizeVariant, error) {
 		return nil, fmt.Errorf("no size data found on page")
 	}
 	return variants, nil
+}
+
+// zaraPriceAttrRe matches Zara's <data data-currency="PLN" value="299.00"> price nodes.
+var zaraPriceAttrRe = regexp.MustCompile(`data-currency="([A-Za-z]{3})"\s+value="([0-9]+(?:\.[0-9]+)?)"`)
+
+// ParseZaraPrice returns the product's actual current price off a (rendered) Zara PDP.
+// EU price-transparency rules ("Omnibus Directive") require Zara to show, alongside a
+// discounted item's current price, its pre-discount reference price(s) — a marked-down
+// page carries several `<data data-currency="..." value="...">` nodes (original price,
+// 30-day-low, current price), and the reference prices are by definition never lower than
+// what the item actually sells for now. So rather than trust whichever price node a
+// screenshot/text search happens to land on (which can lock onto a crossed-out reference
+// price — see the price_token_index=0 bug this replaces), take the smallest value found;
+// on a non-discounted page there's only one node and this is just that price.
+func ParseZaraPrice(body []byte) (price, currency string, ok bool) {
+	matches := zaraPriceAttrRe.FindAllStringSubmatch(string(body), -1)
+	lowest := 0.0
+	for _, m := range matches {
+		val, err := strconv.ParseFloat(m[2], 64)
+		if err != nil {
+			continue
+		}
+		if !ok || val < lowest {
+			ok = true
+			lowest = val
+			currency = m[1]
+			price = m[2]
+		}
+	}
+	return price, currency, ok
 }
 
 func parseZaraProductGroup(raw string) []ZaraSizeVariant {

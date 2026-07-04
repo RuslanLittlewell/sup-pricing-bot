@@ -47,3 +47,33 @@ func TestParseZaraSizesNoJSONLD(t *testing.T) {
 		t.Fatal("expected an error when no ProductGroup JSON-LD is present")
 	}
 }
+
+func TestParseZaraPriceDiscounted(t *testing.T) {
+	// Mirrors the real markup of a marked-down Zara PDP: original price, 30-day-low,
+	// then the actual current (lowest) price — in that document order.
+	html := `<span class="price-old__amount"><data data-currency="PLN" value="899.00"><span class="money-amount__main">899,00 PLN</span></data></span>` +
+		`<del><data data-currency="PLN" value="599.00"><span class="money-amount__main">599,00 PLN</span></data></del>` +
+		`<ins class="price-current"><data data-currency="PLN" value="299.00"><span class="money-amount__main">299,00 PLN</span></data></ins>`
+
+	price, currency, ok := ParseZaraPrice([]byte(html))
+	if !ok {
+		t.Fatal("expected a price to be found")
+	}
+	if price != "299.00" || currency != "PLN" {
+		t.Errorf("ParseZaraPrice = (%q, %q), want (\"299.00\", \"PLN\")", price, currency)
+	}
+}
+
+func TestParseZaraPriceSingle(t *testing.T) {
+	html := `<data data-currency="EUR" value="49.95"><span class="money-amount__main">49,95 EUR</span></data>`
+	price, currency, ok := ParseZaraPrice([]byte(html))
+	if !ok || price != "49.95" || currency != "EUR" {
+		t.Errorf("ParseZaraPrice = (%q, %q, %v), want (\"49.95\", \"EUR\", true)", price, currency, ok)
+	}
+}
+
+func TestParseZaraPriceNone(t *testing.T) {
+	if _, _, ok := ParseZaraPrice([]byte("<html><body>no price here</body></html>")); ok {
+		t.Fatal("expected no price to be found")
+	}
+}

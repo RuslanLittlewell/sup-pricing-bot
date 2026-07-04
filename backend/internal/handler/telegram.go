@@ -335,7 +335,7 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			sendMainMenu(tg, chatID, lang, tr(lang, "menu_unknown_interval"))
 			return
 		}
-		updateTrackerInterval(ctx, pool, tg, chatID, userID, lang, parts[1], minutes, log)
+		updateTrackerInterval(ctx, pool, tg, chatID, userID, lang, parts[1], minutes, messageID, log)
 		clearTelegramState(ctx, pool, chatID)
 	default:
 		sendMainMenu(tg, chatID, lang, tr(lang, "menu_unknown_button"))
