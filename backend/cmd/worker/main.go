@@ -400,7 +400,7 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 
 func isSearchFallbackRuleType(ruleType string) bool {
 	switch ruleType {
-	case "openserp_search_result", "openserp_extract", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet":
+	case "openserp_search_result", "openserp_extract", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet", "gemini_url_context":
 		return true
 	default:
 		return false

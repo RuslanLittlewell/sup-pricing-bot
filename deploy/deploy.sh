@@ -37,6 +37,8 @@ OPEN_SERP_API_KEY="${OPEN_SERP_API_KEY:-$(dotenv_get OPEN_SERP_API_KEY)}"
 SERPER_API_KEY="${SERPER_API_KEY:-$(dotenv_get SERPER_API_KEY)}"
 SERPAPI_KEY="${SERPAPI_KEY:-$(dotenv_get SERPAPI_KEY)}"
 SERPAPI_KEY_2="${SERPAPI_KEY_2:-$(dotenv_get SERPAPI_KEY_2)}"
+GEMINI_API_KEY="${GEMINI_API_KEY:-$(dotenv_get GEMINI_API_KEY)}"
+GEMINI_MODEL="${GEMINI_MODEL:-$(dotenv_get GEMINI_MODEL)}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-$(dotenv_get ADMIN_USERNAME)}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(dotenv_get ADMIN_PASSWORD)}"
 
@@ -106,7 +108,7 @@ run_remote "cd '${DEPLOY_DIR}' && \
   if ! grep -q '^POSTGRES_PASSWORD=' .env.production; then echo POSTGRES_PASSWORD=\$(openssl rand -hex 24) >> .env.production; fi && \
   if ! grep -q '^BETTER_AUTH_SECRET=' .env.production; then echo BETTER_AUTH_SECRET=\$(openssl rand -hex 32) >> .env.production; fi && \
   if ! grep -q '^ADMIN_TOKEN=' .env.production; then echo ADMIN_TOKEN=\$(openssl rand -hex 32) >> .env.production; fi && \
-  grep -v -E '^(APP_DOMAIN|API_DOMAIN|FRONTEND_HOST_PORT|BACKEND_HOST_PORT|TELEGRAM_BOT_TOKEN|BOT_USERNAME|SCRAPER_PROXY_URL|CF_RELAY_URL|CF_RELAY_TOKEN|OPEN_SERP_ENGINES|OPEN_SERP_API_KEY|SERPER_API_KEY|SERPAPI_KEY|SERPAPI_KEY_2|ADMIN_USERNAME|ADMIN_PASSWORD)=' .env.production > .env.production.tmp && mv .env.production.tmp .env.production && \
+  grep -v -E '^(APP_DOMAIN|API_DOMAIN|FRONTEND_HOST_PORT|BACKEND_HOST_PORT|TELEGRAM_BOT_TOKEN|BOT_USERNAME|SCRAPER_PROXY_URL|CF_RELAY_URL|CF_RELAY_TOKEN|OPEN_SERP_ENGINES|OPEN_SERP_API_KEY|SERPER_API_KEY|SERPAPI_KEY|SERPAPI_KEY_2|GEMINI_API_KEY|GEMINI_MODEL|ADMIN_USERNAME|ADMIN_PASSWORD)=' .env.production > .env.production.tmp && mv .env.production.tmp .env.production && \
   printf '%s\n' \
     'APP_DOMAIN=${APP_DOMAIN}' \
     'API_DOMAIN=${API_DOMAIN}' \
@@ -122,6 +124,8 @@ run_remote "cd '${DEPLOY_DIR}' && \
     'SERPER_API_KEY=${SERPER_API_KEY}' \
     'SERPAPI_KEY=${SERPAPI_KEY}' \
     'SERPAPI_KEY_2=${SERPAPI_KEY_2}' \
+    'GEMINI_API_KEY=${GEMINI_API_KEY}' \
+    'GEMINI_MODEL=${GEMINI_MODEL}' \
     'ADMIN_USERNAME=${ADMIN_USERNAME}' \
     'ADMIN_PASSWORD=${ADMIN_PASSWORD}' >> .env.production"
 

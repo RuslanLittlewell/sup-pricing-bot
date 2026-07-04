@@ -240,6 +240,21 @@ func tryZaraPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram
 	return true
 }
 
+// sendScanExhaustedApology sends the "we tried every method and still couldn't scan this
+// site" apology and returns true — but only when err signals that even the last-resort
+// Gemini tier exhausted every model (see extractor.IsAllGeminiModelsFailed). For any other
+// failure it returns false, leaving the caller to fall through to its normal handling (a
+// price the user can still confirm from another path, or a plain "not found").
+func sendScanExhaustedApology(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, err error, log zerolog.Logger) bool {
+	if !extractor.IsAllGeminiModelsFailed(err) {
+		return false
+	}
+	recordExtractionFailure(ctx, pool, userID, url, "all extraction tiers exhausted (incl. all gemini models): "+err.Error(), log)
+	SendTelegramMessage(tg, chatID, tr(lang, "scan_all_failed"))
+	clearTelegramState(ctx, pool, chatID)
+	return true
+}
+
 // sendTextPriceCandidate is the no-screenshot fallback for sendNextPriceCandidate. It
 // creates a tracker only when the fallback found the same requested URL and the exact
 // price the user entered. Ambiguous search results are logged and declined without
@@ -253,8 +268,12 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		log.Warn().Err(err).Str("url", url).Msg("text price candidate: fetch failed")
 		if fallback := extractor.NewSearchFallback(proxypool.NewStore(pool)); fallback != nil {
 			notifyStillSearching(tg, chatID, statusMsgID, lang)
-			if result, fallbackErr := fallback.Extract(nil, url); fallbackErr == nil && len(result.Candidates) > 0 {
+			result, fallbackErr := fallback.Extract(nil, url)
+			if fallbackErr == nil && len(result.Candidates) > 0 {
 				return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, "", result, "page fetch failed: "+err.Error(), log)
+			}
+			if sendScanExhaustedApology(ctx, pool, tg, chatID, userID, lang, url, fallbackErr, log) {
+				return true
 			}
 		}
 		return false
@@ -271,6 +290,9 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		}
 	}
 	if err != nil || len(result.Candidates) == 0 {
+		if sendScanExhaustedApology(ctx, pool, tg, chatID, userID, lang, url, err, log) {
+			return true
+		}
 		return false
 	}
 
@@ -335,7 +357,7 @@ func handleTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *teleg
 
 func isSearchFallbackRule(rule json.RawMessage) bool {
 	switch extractor.RuleType(rule) {
-	case "openserp_search_result", "openserp_extract", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet":
+	case "openserp_search_result", "openserp_extract", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet", "gemini_url_context":
 		return true
 	default:
 		return false
