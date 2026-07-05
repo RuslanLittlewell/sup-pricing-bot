@@ -141,12 +141,26 @@ func applyTributeEvent(ctx context.Context, pool *pgxpool.Pool, eventName string
 			return err
 		}
 
-		_, err = pool.Exec(ctx, `
+		if _, err = pool.Exec(ctx, `
 			INSERT INTO user_plans (user_id, plan_code, tribute_subscription_id, status, expires_at, updated_at)
 			VALUES ($1, $2, $3, 'active', $4, now())
 			ON CONFLICT (user_id) DO UPDATE SET
 				plan_code = $2, tribute_subscription_id = $3, status = 'active', expires_at = $4, updated_at = now()
-		`, userID, planCode, sub.SubscriptionID, sub.ExpiresAt)
+		`, userID, planCode, sub.SubscriptionID, sub.ExpiresAt); err != nil {
+			return err
+		}
+
+		// The scan interval is fixed per plan — move the user's existing trackers onto the
+		// new plan's interval immediately, so an upgrade speeds up (or a downgrade slows)
+		// checks right away rather than only for trackers created after this point.
+		_, err = pool.Exec(ctx, `
+			UPDATE trackers t SET
+				check_interval_minutes = p.check_interval_minutes,
+				next_check_at = LEAST(t.next_check_at, now() + (p.check_interval_minutes * interval '1 minute')),
+				updated_at = now()
+			FROM plans p
+			WHERE p.code = $2 AND t.user_id = $1 AND t.status != 'deleted'
+		`, userID, planCode)
 		return err
 
 	case "cancelled_subscription":

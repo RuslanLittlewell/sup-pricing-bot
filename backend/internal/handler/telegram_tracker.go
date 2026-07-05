@@ -57,69 +57,6 @@ func enforceTrackerLimit(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 	return true
 }
 
-// updateTrackerInterval saves the new scan interval. messageID identifies the
-// interval-picker message the user tapped a button on (0 when the interval instead came
-// from typing a number as free text, which has no picker message to clean up) — on
-// success from a button tap, that picker message is just deleted instead of sending a new
-// confirmation with more buttons, so picking an interval doesn't reprint the whole
-// tracker list underneath it.
-func updateTrackerInterval(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, trackerID string, minutes, messageID int, log zerolog.Logger) {
-	if minutes > 1440 {
-		minutes = 1440
-	}
-	// Enforce the plan's minimum. The interval menu only offers allowed values, but the
-	// user can also type a number in the awaiting_interval step — reject anything faster
-	// than their plan permits rather than silently accepting it.
-	limits := getPlanLimits(ctx, pool, userID)
-	minInterval := limits.minIntervalMinutes
-	if minutes < minInterval {
-		var rows [][]inlineButton
-		if limits.code == "free" && !hasUsedTrial(ctx, pool, userID) {
-			rows = append(rows, []inlineButton{button(tr(lang, "button_activate_trial"), "activate_trial")})
-		}
-		rows = append(rows, []inlineButton{button(tr(lang, "button_plans"), "menu:plans")})
-		_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "interval_below_min"), formatInterval(lang, minInterval)), makeInlineKeyboard(rows...))
-		return
-	}
-	tag, err := pool.Exec(ctx, `
-		UPDATE trackers
-		SET check_interval_minutes = $3,
-		    next_check_at = now() + make_interval(mins => $3),
-		    updated_at = now()
-		WHERE id::text LIKE $1 || '%' AND user_id = $2 AND status != 'deleted'
-	`, trackerID, userID, minutes)
-	if err != nil {
-		log.Error().
-			Err(err).
-			Str("user_id", userID).
-			Str("tracker_id", trackerID).
-			Int("minutes", minutes).
-			Msg("failed to update tracker interval")
-		SendTelegramMessage(tg, chatID, tr(lang, "interval_save_failed"))
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		SendTelegramMessage(tg, chatID, tr(lang, "tracker_not_found"))
-		return
-	}
-	if messageID != 0 {
-		if err := tg.DeleteMessage(chatID, messageID); err != nil {
-			log.Warn().Err(err).Int("message_id", messageID).Msg("failed to delete interval picker message")
-		}
-		return
-	}
-	markup := makeInlineKeyboard(
-		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
-		[]inlineButton{button(tr(lang, "button_back"), "menu:list")},
-	)
-	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "interval_saved"), formatInterval(lang, minutes)), markup)
-}
-
-// defaultNewTrackerIntervalMinutes is what every new tracker is created at — the user
-// then gets an interval picker right after (see sendPostCreateIntervalPrompt) to change it
-// for this specific tracker without having to separately open its Settings.
-const defaultNewTrackerIntervalMinutes = 180
-
 func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string, state telegramState, log zerolog.Logger) {
 	// Final guard: the limit is also checked when the flow starts, but /add and the menu
 	// flow are independent entry points, so re-check right before the insert.
@@ -132,12 +69,16 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		title = extractDomain(state.URL)
 	}
 
+	// The scan interval is fixed by the user's plan (Free 5h / Basic 2.5h / Pro 1h) — the
+	// user doesn't get to choose it, so it's taken straight from getPlanLimits here.
+	interval := getPlanLimits(ctx, pool, userID).minIntervalMinutes
+
 	var trackerID string
 	err := pool.QueryRow(ctx, `
 		INSERT INTO trackers (user_id, url, normalized_url, domain, title, initial_price, current_price, currency, current_stock_status, extraction_rule, extraction_confidence, status, check_interval_minutes, next_check_at)
 		VALUES ($1, $2, $2, $3, $4, $5, $5, $6, 'unknown', $7, 0.9, 'active', $8::int, now() + ($8::int * interval '1 minute'))
 		RETURNING id
-	`, userID, state.URL, extractDomain(state.URL), title, state.InitialPrice, state.Currency, state.Rule, defaultNewTrackerIntervalMinutes).Scan(&trackerID)
+	`, userID, state.URL, extractDomain(state.URL), title, state.InitialPrice, state.Currency, state.Rule, interval).Scan(&trackerID)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to create tracker from telegram state")
 		SendTelegramMessage(tg, chatID, tr(lang, "tracker_create_failed"))
@@ -151,6 +92,7 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		Str("url", state.URL).
 		Float64("price", state.InitialPrice).
 		Str("currency", state.Currency).
+		Int("interval_minutes", interval).
 		Msg("telegram tracker created")
 
 	_, _ = pool.Exec(ctx, `
@@ -160,36 +102,25 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 
 	clearTelegramState(ctx, pool, chatID)
 	markup := makeInlineKeyboard(
-		[]inlineButton{button(tr(lang, "button_settings"), "tracker:edit:"+trackerID[:8])},
 		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
 		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
 	)
-	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_created"), title, state.URL, formatMoney(state.InitialPrice), formatInterval(lang, defaultNewTrackerIntervalMinutes), trackerID[:8]), markup)
-
-	sendPostCreateIntervalPrompt(ctx, pool, tg, chatID, userID, lang, trackerID[:8], log)
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_created"), title, state.URL, formatMoney(state.InitialPrice), formatInterval(lang, interval), trackerID[:8]), markup)
 }
 
-// sendPostCreateIntervalPrompt shows an interval picker for the tracker that was just
-// created, tied to its real ID — clicking a button goes through the exact same
-// "interval:<id>:<minutes>" path as editing an existing tracker's interval later (see
-// handleTelegramCallback), so no separate "not-yet-created tracker" plumbing is needed.
-// The sent message's ID is stashed in telegram_states.pending_message_id so it gets
-// cleaned up (see clearPendingIntervalMessage) if the user does anything else instead of
-// tapping one of its buttons, rather than leaving stale buttons sitting in the chat.
-func sendPostCreateIntervalPrompt(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, trackerID string, log zerolog.Logger) {
-	minInterval := getPlanLimits(ctx, pool, userID).minIntervalMinutes
-	messageID, err := sendIntervalMenuGetID(tg, chatID, lang, trackerID, tr(lang, "interval_prompt"), minInterval)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to send post-create interval prompt")
-		return
-	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO telegram_states (telegram_id, user_id, step, pending_message_id)
-		VALUES ($1, $2, 'idle', $3)
-		ON CONFLICT (telegram_id) DO UPDATE SET step = 'idle', pending_message_id = $3, updated_at = now()
-	`, chatID, userID, messageID); err != nil {
-		log.Warn().Err(err).Msg("failed to save pending interval prompt message id")
-	}
+// syncTrackerIntervalsToPlan re-points all of a user's active trackers to a plan's scan
+// interval — called when their plan changes (trial activation, paid upgrade/downgrade) so
+// the fixed per-plan interval takes effect on trackers they already have, not just new
+// ones. next_check_at is pulled in when the new interval is shorter so a faster plan
+// starts checking sooner rather than waiting out the old, longer gap.
+func syncTrackerIntervalsToPlan(ctx context.Context, pool *pgxpool.Pool, userID string, intervalMinutes int) {
+	_, _ = pool.Exec(ctx, `
+		UPDATE trackers SET
+			check_interval_minutes = $2,
+			next_check_at = LEAST(next_check_at, now() + ($2 * interval '1 minute')),
+			updated_at = now()
+		WHERE user_id = $1 AND status != 'deleted'
+	`, userID, intervalMinutes)
 }
 
 func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, fetcher *extractor.PageFetcher) {
@@ -432,7 +363,7 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 		card += fmt.Sprintf("\nID: <code>%s</code>", shortID)
 
 		kbd := [][]inlineButton{
-			{button(tr(lang, "button_edit"), "tracker:edit:"+shortID), button(tr(lang, "button_delete"), "tracker:delete:"+shortID)},
+			{button(tr(lang, "button_delete"), "tracker:delete:"+shortID)},
 		}
 		if i == len(trackers)-1 {
 			kbd = append(kbd, []inlineButton{button(tr(lang, "button_back"), "menu:back")})

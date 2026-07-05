@@ -121,6 +121,11 @@ var Migrations = []Migration{
 		Description: "record processed telegram update IDs to reject Telegram's own webhook retries",
 		SQL:         migrationV21,
 	},
+	{
+		Version:     22,
+		Description: "fixed per-plan scan intervals (free 5h, basic/trial 2.5h, pro 1h) and pro cap 25",
+		SQL:         migrationV22,
+	},
 }
 
 const migrationV1 = `
@@ -557,6 +562,28 @@ CREATE TABLE IF NOT EXISTS telegram_processed_updates (
     update_id BIGINT PRIMARY KEY,
     processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+`
+
+// migrationV22 sets the fixed per-plan scan intervals (users can no longer choose their
+// own): Free every 5h, Basic/Trial every 2.5h, Pro every 1h. Pro's tracker cap drops to
+// 25. Existing trackers are re-pointed to their owner's current plan interval so the
+// change takes effect immediately, not only for newly-created trackers.
+const migrationV22 = `
+UPDATE plans SET check_interval_minutes = 300 WHERE code = 'free';
+UPDATE plans SET check_interval_minutes = 150 WHERE code IN ('basic', 'trial');
+UPDATE plans SET check_interval_minutes = 60, max_trackers = 25 WHERE code = 'pro';
+
+UPDATE trackers t SET
+    check_interval_minutes = p.check_interval_minutes,
+    next_check_at = LEAST(t.next_check_at, now() + (p.check_interval_minutes * interval '1 minute')),
+    updated_at = now()
+FROM plans p
+WHERE p.code = COALESCE((
+        SELECT up.plan_code FROM user_plans up
+        WHERE up.user_id = t.user_id AND (up.expires_at IS NULL OR up.expires_at > now())
+        LIMIT 1
+    ), 'free')
+  AND t.check_interval_minutes IS DISTINCT FROM p.check_interval_minutes;
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {

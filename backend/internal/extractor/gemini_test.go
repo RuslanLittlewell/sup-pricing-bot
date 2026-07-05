@@ -25,6 +25,42 @@ func TestParseGeminiModels(t *testing.T) {
 	}
 }
 
+func TestGeminiCandidatesMultiVariant(t *testing.T) {
+	// Reproduces the notino multi-size bug: the model reports the cheapest variant (36.50)
+	// as its primary "price", but the tracked variant (103.44) is present in "prices".
+	// candidates() must surface both so the caller's reference-price match can lock onto
+	// 103.44 instead of flapping to 36.50.
+	text := `{"found": true, "price": 36.50, "prices": [36.50, 103.44, 30.60, 36.50], "currency": "PLN", "title": "Shampoo", "in_stock": true}`
+	parsed, ok := parseGeminiResponse(text)
+	if !ok {
+		t.Fatal("parse failed")
+	}
+	cands := parsed.candidates("https://example.com/p")
+
+	// Deduped: 36.50, 103.44, 30.60 → 3 candidates.
+	if len(cands) != 3 {
+		t.Fatalf("got %d candidates, want 3: %+v", len(cands), cands)
+	}
+	if cands[0].Price != "36.5" || cands[0].Confidence != 0.8 {
+		t.Errorf("primary candidate = %s/%.2f, want 36.5/0.80", cands[0].Price, cands[0].Confidence)
+	}
+	found := false
+	for _, c := range cands {
+		if c.Price == "103.44" {
+			found = true
+			if c.Confidence != 0.6 {
+				t.Errorf("alternate 103.44 confidence = %.2f, want 0.60", c.Confidence)
+			}
+		}
+		if c.Currency != "PLN" || c.SourceURL != "https://example.com/p" {
+			t.Errorf("candidate has wrong currency/source: %+v", c)
+		}
+	}
+	if !found {
+		t.Error("tracked variant price 103.44 not present in candidates")
+	}
+}
+
 func TestParseGeminiResponse(t *testing.T) {
 	// The prose-narration-then-fenced-JSON-then-bare-JSON shape below is the actual
 	// output gemini-2.5-flash produced for an H&M product page during development —

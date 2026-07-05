@@ -52,13 +52,14 @@ func IsAllGeminiModelsFailed(err error) bool {
 const geminiPromptTemplate = `Fetch the product page at this exact URL and read its data: %s
 
 Then answer with ONLY a compact JSON object (no markdown, no code fences, no commentary) with exactly these fields:
-{"found": true|false, "price": number|null, "currency": "ISO 4217 code"|null, "title": string|null, "in_stock": true|false|null}
+{"found": true|false, "price": number|null, "prices": [numbers], "currency": "ISO 4217 code"|null, "title": string|null, "in_stock": true|false|null}
 
 Rules:
-- "price" is the current selling price of the product as a plain number (e.g. 27.99). If the item is on sale, use the current discounted price, NOT the original/crossed-out one.
+- "price" is the current selling price of the default/selected variant as a plain number (e.g. 27.99). If it's on sale, use the current discounted price, NOT the crossed-out original.
+- "prices" MUST list EVERY distinct product price shown anywhere on the page — all size/variant options, sale and regular prices — as plain numbers. Many pages sell the same product in several sizes at different prices; include all of them. This is important: a later step matches the specific variant the user is tracking against this list.
 - "currency" is the 3-letter ISO code shown on the page (e.g. PLN, EUR, USD).
-- If you cannot retrieve the page, or the page has no clear product price, return {"found": false, "price": null, "currency": null, "title": null, "in_stock": null}.
-- Never guess or invent a price. Report only what is actually shown on the page.`
+- If you cannot retrieve the page, or it has no clear product price, return {"found": false, "price": null, "prices": [], "currency": null, "title": null, "in_stock": null}.
+- Never guess or invent a price. Report only prices actually shown on the page.`
 
 // GeminiExtractor uses Google's Gemini model with its built-in URLContext tool to fetch
 // and read a product page directly. Because the fetch happens on Google's infrastructure,
@@ -140,18 +141,10 @@ func (e *GeminiExtractor) Extract(_ []byte, pageURL string) (*ExtractionResult, 
 			return empty, nil
 		}
 
-		rule, _ := json.Marshal(map[string]string{"type": "gemini_url_context"})
 		return &ExtractionResult{
 			Title:       parsed.Title,
 			StockStatus: parsed.stockStatus(),
-			Candidates: []PriceCandidate{{
-				Price:      strconv.FormatFloat(*parsed.Price, 'f', -1, 64),
-				Currency:   strings.ToUpper(parsed.Currency),
-				Confidence: 0.8,
-				Label:      "Gemini URL context",
-				SourceURL:  pageURL,
-				Rule:       rule,
-			}},
+			Candidates:  parsed.candidates(pageURL),
 		}, nil
 	}
 
@@ -188,11 +181,12 @@ func geminiRetrievedURL(result *genai.GenerateContentResponse) bool {
 }
 
 type geminiPriceResponse struct {
-	Found    bool     `json:"found"`
-	Price    *float64 `json:"price"`
-	Currency string   `json:"currency"`
-	Title    string   `json:"title"`
-	InStock  *bool    `json:"in_stock"`
+	Found    bool      `json:"found"`
+	Price    *float64  `json:"price"`
+	Prices   []float64 `json:"prices"`
+	Currency string    `json:"currency"`
+	Title    string    `json:"title"`
+	InStock  *bool     `json:"in_stock"`
 }
 
 func (r geminiPriceResponse) stockStatus() string {
@@ -203,6 +197,43 @@ func (r geminiPriceResponse) stockStatus() string {
 		return "in_stock"
 	}
 	return "out_of_stock"
+}
+
+// candidates turns the model's answer into one PriceCandidate per distinct price seen on
+// the page. Emitting every variant's price (not just the model's single "default" pick) is
+// what lets the caller's reference-price/exact-price matching lock onto the specific
+// variant being tracked — the model tends to report the cheapest/first variant as its
+// primary "price", which on a multi-size product page (e.g. notino) is often NOT the one
+// the user is tracking. The primary price keeps the higher confidence so it wins only when
+// nothing better matches. Assumes r.Price != nil (checked by the caller).
+func (r geminiPriceResponse) candidates(pageURL string) []PriceCandidate {
+	rule, _ := json.Marshal(map[string]string{"type": "gemini_url_context"})
+	currency := strings.ToUpper(r.Currency)
+
+	mk := func(price float64, confidence float64) PriceCandidate {
+		return PriceCandidate{
+			Price:      strconv.FormatFloat(price, 'f', -1, 64),
+			Currency:   currency,
+			Confidence: confidence,
+			Label:      "Gemini URL context",
+			SourceURL:  pageURL,
+			Rule:       rule,
+		}
+	}
+
+	seen := map[int64]bool{}
+	cents := func(p float64) int64 { return int64(p*100 + 0.5) }
+
+	out := []PriceCandidate{mk(*r.Price, 0.8)}
+	seen[cents(*r.Price)] = true
+	for _, p := range r.Prices {
+		if p <= 0 || seen[cents(p)] {
+			continue
+		}
+		seen[cents(p)] = true
+		out = append(out, mk(p, 0.6))
+	}
+	return out
 }
 
 // geminiJSONObjectRe matches a flat JSON object (no nested braces) — the model wraps its
