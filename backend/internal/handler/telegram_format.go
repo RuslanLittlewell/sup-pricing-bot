@@ -45,23 +45,6 @@ func formatMoney(price float64) string {
 	return fmt.Sprintf("💰 %.2f", price)
 }
 
-func parseIntervalMinutes(text string) (int, bool) {
-	re := regexp.MustCompile(`\d+`)
-	match := re.FindString(text)
-	if match == "" {
-		return 0, false
-	}
-	minutes, err := strconv.Atoi(match)
-	if err != nil {
-		return 0, false
-	}
-	lower := strings.ToLower(text)
-	if strings.Contains(lower, "час") || strings.Contains(lower, "hour") || strings.Contains(lower, "godz") {
-		minutes *= 60
-	}
-	return minutes, minutes > 0
-}
-
 func formatInterval(lang string, minutes int) string {
 	if minutes <= 0 {
 		minutes = 180

@@ -17,7 +17,7 @@ type planLimits struct {
 
 // freePlanFallback mirrors the 'free' row seeded by migration V10. Used only if the
 // plans table can't be read, so limits still apply instead of silently going unlimited.
-var freePlanFallback = planLimits{code: "free", maxTrackers: 3, minIntervalMinutes: 180}
+var freePlanFallback = planLimits{code: "free", maxTrackers: 3, minIntervalMinutes: 300}
 
 // getPlanLimits resolves the user's *effective* plan limits. A paid plan applies while
 // its subscription hasn't expired; a cancelled-but-not-yet-expired subscription keeps

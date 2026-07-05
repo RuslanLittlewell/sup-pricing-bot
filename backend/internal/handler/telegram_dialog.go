@@ -153,25 +153,11 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 			_ = tg.SendMessageWithMarkup(chatID, tr(lang, "confirm_prompt"), markup)
 			return true
 		}
-	case "awaiting_interval":
-		interval, ok := parseIntervalMinutes(normalized)
-		if !ok {
-			sendIntervalMenu(tg, chatID, lang, state.URL, tr(lang, "interval_invalid"), getPlanLimits(ctx, pool, userID).minIntervalMinutes)
-			return true
-		}
-		updateTrackerInterval(ctx, pool, tg, chatID, userID, lang, state.URL, interval, 0, log)
-		clearTelegramState(ctx, pool, chatID)
-		return true
 	}
 
 	return false
 }
 
-// beginIntervalSelectionForNewTracker persists the already price-confirmed tracker
-// details and asks how often to scan before saving anything, instead of always defaulting
-// to the plan's slowest interval. state.FetchMethod is transient (see telegramState's doc
-// comment) and does not survive this round-trip through telegram_states — the created
-// tracker's first price_points row just won't have a fetch_method for this path.
 // notifyStillSearching lets the user know a price search is taking longer than usual.
 // Search fallback calls can take up to ~45s — long enough that without this
 // notice a user might think the bot stalled. It edits statusMsgID in place when one is

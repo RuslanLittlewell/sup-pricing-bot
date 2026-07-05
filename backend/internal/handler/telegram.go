@@ -93,13 +93,6 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 			if chatID == 0 {
 				chatID = callback.From.ID
 			}
-			// An "interval:" tap handles cleaning up its own picker message (see
-			// updateTrackerInterval/sendPostCreateIntervalPrompt) — anything else means
-			// the user's attention has moved on, so a still-showing post-creation interval
-			// picker (see sendPostCreateIntervalPrompt) no longer makes sense here.
-			if !strings.HasPrefix(callback.Data, "interval:") {
-				clearPendingIntervalMessage(ctx, pool, tg, chatID)
-			}
 			log.Info().Int64("user_id", callback.From.ID).Str("data", callback.Data).Msg("telegram callback")
 			handleTelegramCallback(ctx, pool, tg, chatID, callback.Message.MessageID, userID, lang, callback.Data, log, rend, cfg)
 			return
@@ -125,7 +118,6 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 			return
 		}
 		lang := getTelegramLanguage(ctx, pool, from.ID)
-		clearPendingIntervalMessage(ctx, pool, tg, from.ID)
 
 		switch {
 		case text == "/start":
@@ -150,23 +142,6 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 			SendTelegramMessage(tg, from.ID, tr(lang, "send_link_or_help"))
 		}
 	}
-}
-
-// clearPendingIntervalMessage removes a still-showing post-tracker-creation interval
-// picker (see sendPostCreateIntervalPrompt) once the user has moved on to something else —
-// those buttons stop making sense the moment the user's attention shifts, so leaving them
-// sitting in the chat would just be stale clutter. No-op when nothing is pending.
-func clearPendingIntervalMessage(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64) {
-	var messageID int
-	err := pool.QueryRow(ctx, `
-		UPDATE telegram_states SET pending_message_id = NULL
-		WHERE telegram_id = $1 AND pending_message_id IS NOT NULL
-		RETURNING pending_message_id
-	`, chatID).Scan(&messageID)
-	if err != nil || messageID == 0 {
-		return
-	}
-	_ = tg.DeleteMessage(chatID, messageID)
 }
 
 func getUserIDByTelegramID(ctx context.Context, pool *pgxpool.Pool, telegramID int64) (string, error) {
@@ -257,6 +232,9 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			SendTelegramMessage(tg, chatID, tr(lang, "trial_already_used"))
 			return
 		}
+		// Trial grants Basic-tier limits — bring the user's existing trackers onto the
+		// (faster) Basic scan interval right away, not just newly-created ones.
+		syncTrackerIntervalsToPlan(ctx, pool, userID, getPlanLimits(ctx, pool, userID).minIntervalMinutes)
 		SendTelegramMessage(tg, chatID, tr(lang, "trial_activated"))
 	case data == "menu:new":
 		clearTelegramState(ctx, pool, chatID)
@@ -361,28 +339,6 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 				log.Warn().Err(err).Int("message_id", messageID).Msg("failed to delete tracker card message")
 			}
 		}
-	case strings.HasPrefix(data, "tracker:edit:"):
-		trackerID := strings.TrimPrefix(data, "tracker:edit:")
-		_, _ = pool.Exec(ctx, `
-			INSERT INTO telegram_states (telegram_id, user_id, step, url)
-			VALUES ($1, $2, 'awaiting_interval', $3)
-			ON CONFLICT (telegram_id) DO UPDATE
-			SET user_id = $2, step = 'awaiting_interval', url = $3, updated_at = now()
-		`, chatID, userID, trackerID)
-		sendIntervalMenu(tg, chatID, lang, trackerID, tr(lang, "interval_prompt"), getPlanLimits(ctx, pool, userID).minIntervalMinutes)
-	case strings.HasPrefix(data, "interval:"):
-		parts := strings.Split(data, ":")
-		if len(parts) != 3 {
-			sendMainMenu(tg, chatID, lang, tr(lang, "menu_unknown_interval"))
-			return
-		}
-		minutes, err := strconv.Atoi(parts[2])
-		if err != nil {
-			sendMainMenu(tg, chatID, lang, tr(lang, "menu_unknown_interval"))
-			return
-		}
-		updateTrackerInterval(ctx, pool, tg, chatID, userID, lang, parts[1], minutes, messageID, log)
-		clearTelegramState(ctx, pool, chatID)
 	default:
 		sendMainMenu(tg, chatID, lang, tr(lang, "menu_unknown_button"))
 	}

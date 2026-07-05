@@ -13,7 +13,7 @@ const plans = [
     trackersKey: "pricing.free.trackers",
     trackers: "3 trackers",
     intervalKey: "pricing.free.interval",
-    interval: "Scan every 3+ hours",
+    interval: "Check every 5 hours",
     ctaKey: "pricing.free.cta",
     cta: "Start Free",
     highlight: false,
@@ -28,7 +28,7 @@ const plans = [
     trackersKey: "pricing.basic.trackers",
     trackers: "10 trackers",
     intervalKey: "pricing.basic.interval",
-    interval: "Scan every 1+ hour",
+    interval: "Check every 2.5 hours — 100% more often than Free",
     ctaKey: "pricing.basic.cta",
     cta: "Choose Basic",
     highlight: true,
@@ -39,9 +39,9 @@ const plans = [
     taglineKey: "pricing.pro.tagline",
     tagline: "For power users & resellers",
     trackersKey: "pricing.pro.trackers",
-    trackers: "50 trackers",
+    trackers: "25 trackers",
     intervalKey: "pricing.pro.interval",
-    interval: "Scan every 30+ minutes",
+    interval: "Check every hour — 400% more often than Free",
     ctaKey: "pricing.pro.cta",
     cta: "Choose Pro",
     highlight: false,
@@ -109,13 +109,14 @@ const plans = [
               <div data-i18n={plan.trackersKey} class="text-3xl font-bold">
                 {plan.trackers}
               </div>
-              <p data-i18n={plan.intervalKey} class={`mt-2 text-sm ${plan.highlight ? "text-slate-500" : "text-white/75"}`}>
-                {plan.interval}
-              </p>
             </div>
 
             <ul class="mt-6 flex-1 space-y-3">
-              {["pricing.feature.alerts", "pricing.feature.telegram"].map((key, i) => (
+              {[
+                { key: plan.intervalKey, text: plan.interval },
+                { key: "pricing.feature.alerts", text: "Price & stock alerts" },
+                { key: "pricing.feature.telegram", text: "Instant Telegram notifications" },
+              ].map((feature) => (
                 <li class="flex items-center gap-3 text-sm">
                   <span
                     class={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
@@ -126,8 +127,8 @@ const plans = [
                       <path d="M6.4 11.2 2.8 7.6l1.13-1.13L6.4 8.93l5.67-5.67L13.2 4.4z" />
                     </svg>
                   </span>
-                  <span data-i18n={key} class={plan.highlight ? "text-slate-600" : "text-white/90"}>
-                    {i === 0 ? "Price & stock alerts" : "Instant Telegram notifications"}
+                  <span data-i18n={feature.key} class={plan.highlight ? "text-slate-600" : "text-white/90"}>
+                    {feature.text}
                   </span>
                 </li>
               ))}
