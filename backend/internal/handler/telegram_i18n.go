@@ -1,5 +1,7 @@
 package handler
 
+import "strings"
+
 const defaultBotLanguage = "en"
 
 var botTexts = map[string]map[string]string{
@@ -29,6 +31,7 @@ var botTexts = map[string]map[string]string{
 		"button_new_tracker":      "➕ New tracker",
 		"button_trackers":         "My trackers",
 		"button_plans":            "💳 Pricing",
+		"button_instruction":      "📖 Instruction",
 		"plan_free_name":          "Free",
 		"plan_free_tagline":       "For getting started",
 		"plan_free_trackers":      "Up to 3 trackers",
@@ -120,6 +123,7 @@ var botTexts = map[string]map[string]string{
 		"button_new_tracker":      "➕ Новый трекер",
 		"button_trackers":         "Мои трекеры",
 		"button_plans":            "💳 Тарифы",
+		"button_instruction":      "📖 Инструкция",
 		"plan_free_name":          "Free",
 		"plan_free_tagline":       "Чтобы начать",
 		"plan_free_trackers":      "До 3 трекеров",
@@ -155,7 +159,7 @@ var botTexts = map[string]map[string]string{
 		"price_invalid":           "Введите цену числом, например: 1299, 1299.99 или 1299 zł",
 		"confirm_prompt":          "Ответьте «да», если блок с ценой найден верно, или «нет», чтобы попробовать следующий.",
 		"search_unavailable":      "Не могу продолжить поиск прямо сейчас. Отправьте ссылку заново.",
-		"search_started":          "Ищу блок с ценой на странице...",
+		"search_started":          "Сверяю цену на сайте...",
 		"search_more_time":        "⏳ Это занимает чуть больше времени, чем обычно — всё ещё ищу цену...",
 		"access_denied":           "Сайт заблокировал загрузку страницы для бота. Для этой ссылки пока не могу снять скриншот цены.",
 		"protected_site_noted":    "Извините, у этого сайта есть дополнительная защита, и я не смог надёжно подтвердить цену товара. Я записал ссылку, будем работать над исправлением.",
@@ -211,6 +215,7 @@ var botTexts = map[string]map[string]string{
 		"button_new_tracker":      "➕ Nowy tracker",
 		"button_trackers":         "Moje trackery",
 		"button_plans":            "💳 Cennik",
+		"button_instruction":      "📖 Instrukcja",
 		"plan_free_name":          "Free",
 		"plan_free_tagline":       "Na początek",
 		"plan_free_trackers":      "Do 3 trackerów",
@@ -285,6 +290,24 @@ func tr(lang, key string) string {
 		}
 	}
 	return botTexts[defaultBotLanguage][key]
+}
+
+// isButtonLabel reports whether text equals the label for key in any supported language.
+// Reply-keyboard taps arrive as plain text messages carrying the button's visible label,
+// and a user's persistent keyboard may still show labels in the language they had before
+// switching, so we match against every language's translation of key rather than only the
+// current one.
+func isButtonLabel(text, key string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	for _, texts := range botTexts {
+		if label, ok := texts[key]; ok && label == trimmed {
+			return true
+		}
+	}
+	return false
 }
 
 func validBotLanguage(lang string) string {

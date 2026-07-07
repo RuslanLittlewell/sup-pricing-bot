@@ -321,6 +321,15 @@ func isBotChallenge(body []byte) bool {
 
 func shouldRenderFallback(err error) bool {
 	msg := err.Error()
+	// An SSRF-guard rejection (security.SafeDialControl refusing a private/rebound target
+	// IP) must never escalate to the relay or, especially, the headless renderer: chromium
+	// re-resolves the host itself and has no such guard, so falling through would reach the
+	// internal address the direct dialer just refused. It arrives wrapped as "utls dial:
+	// blocked dial to ...", which would otherwise match the "utls dial:" indicator below, so
+	// short-circuit it here as a hard, non-retryable failure.
+	if strings.Contains(msg, "blocked dial to") {
+		return false
+	}
 	indicators := []string{
 		"context deadline exceeded",
 		"Client.Timeout exceeded",
