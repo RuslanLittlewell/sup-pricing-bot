@@ -55,15 +55,29 @@ var outOfStockPhrases = []string{
 	"больше не продаётся",
 }
 
+// minStockBodyBytes is the smallest body we'll treat as a real product page for the
+// keyword scan. Below this, an empty/truncated/error response can't be distinguished from
+// a genuine in-stock page (which has no positive marker of its own), and defaulting such a
+// body to "in_stock" is exactly what produced spurious "back in stock" notifications. It's
+// deliberately low — only degenerate responses fall under it; sophisticated bot-challenge
+// or error pages that are large enough are the fetcher's isBotChallenge job, not this one.
+const minStockBodyBytes = 512
+
 // DetectStockStatusFromText does a plain case-insensitive search for known "out of stock"
 // phrases on the raw page body. Used by the availability-only tracking mode, which doesn't
-// try to parse a price.
+// try to parse a price. Returns "out_of_stock" on a phrase match, "unknown" when the body
+// is too small to be a real product page (see minStockBodyBytes), and "in_stock"
+// otherwise — since the absence of an out-of-stock phrase on a substantive page is our only
+// available in-stock signal.
 func DetectStockStatusFromText(htmlContent []byte) string {
 	lowered := strings.ToLower(string(htmlContent))
 	for _, phrase := range outOfStockPhrases {
 		if strings.Contains(lowered, phrase) {
 			return "out_of_stock"
 		}
+	}
+	if len(strings.TrimSpace(lowered)) < minStockBodyBytes {
+		return "unknown"
 	}
 	return "in_stock"
 }
@@ -103,5 +117,13 @@ func DetectStockStatus(extractionRuleJSON []byte, body []byte) (status, method s
 			return "", "", fmt.Errorf("size %q is no longer listed on the page", rule.Size)
 		}
 	}
-	return DetectStockStatusFromText(body), "keyword_scan", nil
+	status = DetectStockStatusFromText(body)
+	if status == "unknown" {
+		// A body too small/degenerate to read is an extraction failure, not a real stock
+		// signal — returning an error routes it through the worker's error handling (retry,
+		// then needs_confirmation) instead of recording a bogus status change and firing a
+		// false "back in stock"/"out of stock" notification off it.
+		return "", "", fmt.Errorf("page too small to determine stock status (%d bytes)", len(body))
+	}
+	return status, "keyword_scan", nil
 }

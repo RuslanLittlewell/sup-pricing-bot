@@ -1,6 +1,9 @@
 package extractor
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDetectStockStatusGenericKeywordScan(t *testing.T) {
 	status, method, err := DetectStockStatus(nil, []byte("<html>Sorry, this item is out of stock</html>"))
@@ -9,6 +12,29 @@ func TestDetectStockStatusGenericKeywordScan(t *testing.T) {
 	}
 	if status != "out_of_stock" || method != "keyword_scan" {
 		t.Fatalf("expected out_of_stock/keyword_scan, got %s/%s", status, method)
+	}
+}
+
+func TestDetectStockStatusEmptyBodyErrors(t *testing.T) {
+	// A degenerate (empty/truncated) response must not be read as in_stock — that produced
+	// spurious "back in stock" notifications. It should surface as an extraction error.
+	for _, body := range [][]byte{nil, []byte(""), []byte("   \n  "), []byte("<html></html>")} {
+		if _, _, err := DetectStockStatus(nil, body); err == nil {
+			t.Fatalf("expected error for degenerate body %q, got none", body)
+		}
+	}
+}
+
+func TestDetectStockStatusSubstantivePageInStock(t *testing.T) {
+	// A real page with no out-of-stock phrase is our in_stock signal; the small-body guard
+	// must not swallow it.
+	body := []byte("<html><body>" + strings.Repeat("Makita DUR193Z podkaszarka ", 60) + "</body></html>")
+	status, method, err := DetectStockStatus(nil, body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != "in_stock" || method != "keyword_scan" {
+		t.Fatalf("expected in_stock/keyword_scan, got %s/%s", status, method)
 	}
 }
 

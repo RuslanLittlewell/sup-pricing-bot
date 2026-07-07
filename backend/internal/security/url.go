@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"syscall"
 )
 
 var privateIPBlocks []*net.IPNet
@@ -50,6 +51,33 @@ func ValidateURL(rawURL string) error {
 		return fmt.Errorf("private or internal address not allowed")
 	}
 
+	return nil
+}
+
+// SafeDialControl is a net.Dialer.Control hook that rejects connections to private,
+// loopback, or link-local IPs. It complements ValidateURL rather than replacing it:
+// ValidateURL resolves DNS at check time, but the dialer resolves again before
+// connecting, so a hostname that passed validation can re-resolve to an internal address
+// by the time we dial (DNS rebinding / TOCTOU), and redirects reach the dialer without
+// going through ValidateURL's host at all. Control runs after the dialer's own resolution,
+// immediately before connecting to the concrete IP, closing that window.
+//
+// Only wire this into dialers used for direct (non-proxy) fetches. When a forward proxy is
+// configured, the dialer connects to the operator-controlled proxy (which may legitimately
+// be a private/localhost address), and the target host is resolved at the proxy — out of
+// this hook's reach and out of scope for it.
+func SafeDialControl(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("blocked dial to unresolved address %q", address)
+	}
+	if isPrivateIP(ip) {
+		return fmt.Errorf("blocked dial to private address %s", ip)
+	}
 	return nil
 }
 

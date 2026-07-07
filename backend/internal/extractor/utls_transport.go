@@ -12,6 +12,8 @@ import (
 	"time"
 
 	utls "github.com/refraction-networking/utls"
+
+	"github.com/littlewell/price-tracker/internal/security"
 )
 
 // newUTLSRoundTripper builds an http.RoundTripper that performs the TLS handshake with
@@ -28,17 +30,26 @@ import (
 // than just not offering h2. The TLS layer fingerprint — the part actually being
 // checked — is unaffected by this.
 func newUTLSRoundTripper(proxyURL *url.URL) http.RoundTripper {
+	// The direct dialer validates the resolved IP (SSRF guard) right before connecting;
+	// the proxy dialer must not, since the operator's proxy may itself be a private/
+	// localhost address — see security.SafeDialControl's doc comment.
+	fallbackDialer := &net.Dialer{Timeout: 15 * time.Second}
+	if proxyURL == nil {
+		fallbackDialer.Control = security.SafeDialControl
+	}
 	return &utlsRoundTripper{
-		dialer:   &net.Dialer{Timeout: 15 * time.Second},
-		proxyURL: proxyURL,
-		fallback: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+		dialer:      &net.Dialer{Timeout: 15 * time.Second, Control: security.SafeDialControl},
+		proxyDialer: &net.Dialer{Timeout: 15 * time.Second},
+		proxyURL:    proxyURL,
+		fallback:    &http.Transport{Proxy: http.ProxyURL(proxyURL), DialContext: fallbackDialer.DialContext},
 	}
 }
 
 type utlsRoundTripper struct {
-	dialer   *net.Dialer
-	proxyURL *url.URL
-	fallback *http.Transport // used for non-https requests; uTLS only applies to TLS
+	dialer      *net.Dialer     // direct dials; validates target IP against SSRF (see newUTLSRoundTripper)
+	proxyDialer *net.Dialer     // dials the (operator-controlled) proxy host; no SSRF guard
+	proxyURL    *url.URL
+	fallback    *http.Transport // used for non-https requests; uTLS only applies to TLS
 }
 
 func (rt *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -111,7 +122,7 @@ func (rt *utlsRoundTripper) dialThroughProxy(ctx context.Context, addr string) (
 		return rt.dialer.DialContext(ctx, "tcp", addr)
 	}
 
-	proxyConn, err := rt.dialer.DialContext(ctx, "tcp", rt.proxyURL.Host)
+	proxyConn, err := rt.proxyDialer.DialContext(ctx, "tcp", rt.proxyURL.Host)
 	if err != nil {
 		return nil, fmt.Errorf("dial proxy: %w", err)
 	}

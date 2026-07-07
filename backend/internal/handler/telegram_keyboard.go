@@ -29,6 +29,46 @@ func button(text, data string) inlineButton {
 	return inlineButton{Text: text, CallbackData: data}
 }
 
+// replyButton is a key on a reply keyboard — the kind pinned under the input field.
+// Unlike an inline button it carries no callback data: tapping it sends its Text back as
+// an ordinary message, which the update handler matches with isButtonLabel.
+type replyButton struct {
+	Text string `json:"text"`
+}
+
+type replyKeyboard struct {
+	Keyboard       [][]replyButton `json:"keyboard"`
+	ResizeKeyboard bool            `json:"resize_keyboard"`
+	IsPersistent   bool            `json:"is_persistent"`
+}
+
+func replyBtn(text string) replyButton {
+	return replyButton{Text: text}
+}
+
+// makeReplyKeyboard builds a keyboard pinned under the input field. resize_keyboard keeps
+// it compact; is_persistent keeps it always visible instead of collapsing to the keyboard
+// icon. Deliberately no one_time_keyboard — that would hide it after the first tap, which
+// is the opposite of what we want here.
+func makeReplyKeyboard(rows ...[]replyButton) json.RawMessage {
+	data, _ := json.Marshal(replyKeyboard{
+		Keyboard:       rows,
+		ResizeKeyboard: true,
+		IsPersistent:   true,
+	})
+	return data
+}
+
+// mainMenuReplyKeyboard is the persistent 2x2 keyboard shown under the input field at every
+// "home" point (language chosen, back to menu, ...). Its taps are routed by label in the
+// update handler's message switch, not by callback data.
+func mainMenuReplyKeyboard(lang string) json.RawMessage {
+	return makeReplyKeyboard(
+		[]replyButton{replyBtn(tr(lang, "button_new_tracker")), replyBtn(tr(lang, "button_trackers"))},
+		[]replyButton{replyBtn(tr(lang, "button_plans")), replyBtn(tr(lang, "button_instruction"))},
+	)
+}
+
 func linkButton(text, url string) inlineButton {
 	return inlineButton{Text: text, URL: url}
 }
@@ -41,14 +81,11 @@ func sendLanguageMenu(tg *telegram.Client, chatID int64) {
 	_ = tg.SendMessageWithMarkup(chatID, tr(defaultBotLanguage, "choose_language"), markup)
 }
 
+// sendMainMenu shows the persistent reply keyboard (New tracker / My trackers / Pricing /
+// Instruction) pinned under the input field. Language is reached via /lang rather than a
+// menu button now that the four primary actions live on the always-visible keyboard.
 func sendMainMenu(tg *telegram.Client, chatID int64, lang, text string) {
-	markup := makeInlineKeyboard(
-		[]inlineButton{button(tr(lang, "button_new_tracker"), "menu:new")},
-		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
-		[]inlineButton{button(tr(lang, "button_plans"), "menu:plans")},
-		[]inlineButton{button(tr(lang, "button_choose_language"), "menu:language")},
-	)
-	_ = tg.SendMessageWithMarkup(chatID, text, markup)
+	_ = tg.SendMessageWithMarkup(chatID, text, mainMenuReplyKeyboard(lang))
 }
 
 // tributeSubscriptionURL maps a paid plan code to its Tribute Mini App subscription

@@ -136,12 +136,42 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 			handleDeleteTracker(ctx, pool, tg, from.ID, userID, lang, text[8:], log)
 		case strings.HasPrefix(text, "/history "):
 			handleTrackerHistory(ctx, pool, tg, from.ID, userID, lang, text[9:], log)
+		// Persistent reply-keyboard taps arrive as plain messages carrying the button label.
+		// They're matched here, before handleTrackerDialog, so tapping a bottom button is
+		// global navigation that overrides any half-finished add-tracker dialog.
+		case isButtonLabel(text, "button_new_tracker"):
+			startNewTrackerFlow(ctx, pool, tg, from.ID, userID, lang, log)
+		case isButtonLabel(text, "button_trackers"):
+			clearTelegramState(ctx, pool, from.ID)
+			handleListTrackers(ctx, pool, tg, from.ID, userID, lang, log)
+		case isButtonLabel(text, "button_plans"):
+			clearTelegramState(ctx, pool, from.ID)
+			sendPlansMenu(ctx, pool, tg, from.ID, userID, lang)
+		case isButtonLabel(text, "button_instruction"):
+			SendTelegramMessage(tg, from.ID, tr(lang, "help"))
 		case handleTrackerDialog(ctx, pool, tg, from.ID, userID, lang, text, log, rend, cfg):
 			return
 		default:
 			SendTelegramMessage(tg, from.ID, tr(lang, "send_link_or_help"))
 		}
 	}
+}
+
+// startNewTrackerFlow begins the "add a tracker" dialog: it clears any half-finished state,
+// enforces the plan's tracker limit, records the awaiting_mode step, and asks price-vs-stock.
+// Shared by the inline menu:new callback and the persistent keyboard's "New tracker" tap.
+func startNewTrackerFlow(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string, log zerolog.Logger) {
+	clearTelegramState(ctx, pool, chatID)
+	if !enforceTrackerLimit(ctx, pool, tg, chatID, userID, lang, log) {
+		return
+	}
+	_, err := pool.Exec(ctx, `INSERT INTO telegram_states (telegram_id, user_id, step) VALUES ($1, $2, 'awaiting_mode')`, chatID, userID)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to start new tracker flow")
+		SendTelegramMessage(tg, chatID, tr(lang, "save_link_failed"))
+		return
+	}
+	sendModeMenu(tg, chatID, lang, tr(lang, "choose_tracking_mode"))
 }
 
 func getUserIDByTelegramID(ctx context.Context, pool *pgxpool.Pool, telegramID int64) (string, error) {
@@ -237,17 +267,7 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		syncTrackerIntervalsToPlan(ctx, pool, userID, getPlanLimits(ctx, pool, userID).minIntervalMinutes)
 		SendTelegramMessage(tg, chatID, tr(lang, "trial_activated"))
 	case data == "menu:new":
-		clearTelegramState(ctx, pool, chatID)
-		if !enforceTrackerLimit(ctx, pool, tg, chatID, userID, lang, log) {
-			return
-		}
-		_, err := pool.Exec(ctx, `INSERT INTO telegram_states (telegram_id, user_id, step) VALUES ($1, $2, 'awaiting_mode')`, chatID, userID)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to start new tracker flow")
-			SendTelegramMessage(tg, chatID, tr(lang, "save_link_failed"))
-			return
-		}
-		sendModeMenu(tg, chatID, lang, tr(lang, "choose_tracking_mode"))
+		startNewTrackerFlow(ctx, pool, tg, chatID, userID, lang, log)
 	case data == "mode:price":
 		state, ok := getTelegramState(ctx, pool, chatID)
 		if !ok || state.Step != "awaiting_mode" {
