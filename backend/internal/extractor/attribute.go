@@ -21,6 +21,13 @@ func NewAttribute() *AttributeExtractor {
 func (e *AttributeExtractor) Domain() string { return "*" }
 
 func (e *AttributeExtractor) Extract(htmlContent []byte, url string) (*ExtractionResult, error) {
+	if allegro := extractAllegroOffer(htmlContent, url); allegro != nil {
+		return allegro, nil
+	}
+	if IsAllegroURL(url) {
+		return &ExtractionResult{Candidates: []PriceCandidate{}}, nil
+	}
+
 	result := &ExtractionResult{
 		Candidates: []PriceCandidate{},
 	}

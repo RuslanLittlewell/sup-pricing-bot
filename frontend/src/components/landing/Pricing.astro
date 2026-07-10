@@ -12,8 +12,8 @@ const plans = [
     tagline: "For getting started",
     trackersKey: "pricing.free.trackers",
     trackers: "3 trackers",
-    intervalKey: "pricing.free.interval",
-    interval: "Check every 5 hours",
+    intervalKey: undefined,
+    interval: undefined,
     ctaKey: "pricing.free.cta",
     cta: "Start Free",
     highlight: false,
@@ -28,7 +28,7 @@ const plans = [
     trackersKey: "pricing.basic.trackers",
     trackers: "10 trackers",
     intervalKey: "pricing.basic.interval",
-    interval: "Check every 2.5 hours — 100% more often than Free",
+    interval: "100% more often than Free",
     ctaKey: "pricing.basic.cta",
     cta: "Choose Basic",
     highlight: true,
@@ -41,7 +41,7 @@ const plans = [
     trackersKey: "pricing.pro.trackers",
     trackers: "25 trackers",
     intervalKey: "pricing.pro.interval",
-    interval: "Check every hour — 400% more often than Free",
+    interval: "400% more often than Free",
     ctaKey: "pricing.pro.cta",
     cta: "Choose Pro",
     highlight: false,
@@ -113,7 +113,7 @@ const plans = [
 
             <ul class="mt-6 flex-1 space-y-3">
               {[
-                { key: plan.intervalKey, text: plan.interval },
+                ...(plan.intervalKey ? [{ key: plan.intervalKey, text: plan.interval }] : []),
                 { key: "pricing.feature.alerts", text: "Price & stock alerts" },
                 { key: "pricing.feature.telegram", text: "Instant Telegram notifications" },
               ].map((feature) => (

@@ -44,6 +44,14 @@ services:
     # http://openserp:7000. Free/self-hosted search+extract fallback, ahead of the paid
     # Serper/SerpAPI tiers.
 
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    volumes:
+      - ./searxng-settings.yml:/etc/searxng/settings.yml:ro
+    # Private JSON metasearch API. No host port is published; only backend and worker
+    # can reach it over the Compose network.
+
   backend:
     build:
       context: ../backend
@@ -68,6 +76,7 @@ services:
       OPEN_SERP_BASE_URL: http://openserp:7000
       OPEN_SERP_ENGINES: ${OPEN_SERP_ENGINES:-google,bing,duckduckgo}
       OPEN_SERP_API_KEY: ${OPEN_SERP_API_KEY:-}
+      SEARXNG_BASE_URL: http://searxng:8080
       SERPER_API_KEY: ${SERPER_API_KEY:-}
       SERPAPI_KEY: ${SERPAPI_KEY:-}
       SERPAPI_KEY_2: ${SERPAPI_KEY_2:-}
@@ -84,6 +93,14 @@ services:
         condition: service_healthy
       openserp:
         condition: service_started
+      searxng:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
 
   worker:
     build:
@@ -106,6 +123,7 @@ services:
       OPEN_SERP_BASE_URL: http://openserp:7000
       OPEN_SERP_ENGINES: ${OPEN_SERP_ENGINES:-google,bing,duckduckgo}
       OPEN_SERP_API_KEY: ${OPEN_SERP_API_KEY:-}
+      SEARXNG_BASE_URL: http://searxng:8080
       SERPER_API_KEY: ${SERPER_API_KEY:-}
       SERPAPI_KEY: ${SERPAPI_KEY:-}
       SERPAPI_KEY_2: ${SERPAPI_KEY_2:-}
@@ -117,6 +135,8 @@ services:
       db:
         condition: service_healthy
       openserp:
+        condition: service_started
+      searxng:
         condition: service_started
 
   frontend:
@@ -143,7 +163,17 @@ services:
       backend:
         condition: service_started
 
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    volumes:
+      - uptime_kuma_data:/app/data
+    ports:
+      - "127.0.0.1:${UPTIME_KUMA_HOST_PORT:-13001}:3001"
+
 volumes:
   pgdata:
   caddy_data:
   caddy_config:
+  uptime_kuma_data:

@@ -42,12 +42,27 @@ export interface FailedTracker {
   url: string
   error: string
   timestamp: string
+  consecutiveErrors: number
 }
 
 export interface TrackersResponse {
   fallbackTrackers: FallbackTracker[]
   failedTrackers: FailedTracker[]
   generatedAt: string
+}
+
+export interface ServiceStatus {
+  status: 'healthy' | 'degraded'
+  databaseStatus: string
+  workerStatus: string
+  workerLastSeenAt: string | null
+  workerAgeSeconds: number | null
+  activeTrackers: number
+  failingTrackers: number
+  dueTrackers: number
+  pendingNotifications: number
+  databaseConnections: number
+  checkedAt: string
 }
 
 export interface AdminProxy {
@@ -136,6 +151,10 @@ export function fetchTrackers(creds: Credentials): Promise<TrackersResponse> {
   return adminGet('/api/admin/trackers', creds)
 }
 
+export function fetchServiceStatus(creds: Credentials): Promise<ServiceStatus> {
+  return adminGet('/api/admin/status', creds)
+}
+
 export function fetchUserTrackers(creds: Credentials, userId: string): Promise<UserTracker[]> {
   return adminGet(`/api/admin/users/${encodeURIComponent(userId)}/trackers`, creds)
 }
@@ -169,7 +188,9 @@ export async function addProxies(
     }
     throw new Error(msg)
   }
-  return res.json()
+  // The backend marshals a nil Go slice as null when every line parsed.
+  const body = (await res.json()) as { added: number; invalid: string[] | null }
+  return { added: body.added, invalid: body.invalid ?? [] }
 }
 
 export async function checkProxy(

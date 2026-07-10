@@ -11,6 +11,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
           <div className="flex items-center gap-6">
             <span className="font-semibold">Price Tracker — Admin</span>
             <nav className="flex gap-1">
+              <NavItem to="/status">Status</NavItem>
               <NavItem to="/users">Users</NavItem>
               <NavItem to="/trackers">Trackers</NavItem>
               <NavItem to="/proxies">Proxies</NavItem>

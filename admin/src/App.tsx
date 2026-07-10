@@ -8,6 +8,7 @@ import { UsersPage } from './pages/UsersPage'
 import { UserTrackersPage } from './pages/UserTrackersPage'
 import { TrackersPage } from './pages/TrackersPage'
 import { ProxiesPage } from './pages/ProxiesPage'
+import { StatusPage } from './pages/StatusPage'
 
 function App() {
   const { credentials, login, logout } = useAuth()
@@ -39,6 +40,10 @@ function App() {
       <Route element={<Layout onLogout={logout} />}>
         <Route path="/" element={<Navigate to="/users" replace />} />
         <Route
+		  path="/status"
+		  element={<StatusPage credentials={credentials} onAuthFailure={handleAuthFailure} />}
+		/>
+		<Route
           path="/users"
           element={<UsersPage credentials={credentials} onAuthFailure={handleAuthFailure} />}
         />

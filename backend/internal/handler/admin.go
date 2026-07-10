@@ -17,13 +17,14 @@ import (
 	"github.com/littlewell/price-tracker/internal/proxypool"
 )
 
-// adminSearchExtractionMethods are the rule types set by the token/API-key-based search
-// fallback tiers (OpenSERP, Serper, SerpAPI) — see extractor.RuleType and each
+// adminSearchExtractionMethods are the rule types set by the search fallback tiers
+// (OpenSERP, SearXNG, Serper, SerpAPI) — see extractor.RuleType and each
 // extractor's own "type" value. Everything else (json_ld, dom_attribute, meta_tag,
 // microdata, css_selector, css_text) came from reading the page directly, for free.
 var adminSearchExtractionMethods = []string{
 	"openserp_search_result",
 	"openserp_extract",
+	"searxng_exact_offer",
 	"serper_organic_result",
 	"serper_shopping_result",
 	"serpapi_rich_snippet",
@@ -65,20 +66,80 @@ type adminFallbackTracker struct {
 }
 
 type adminFailedTracker struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind"`
-	UserID    string `json:"userId"`
-	UserName  string `json:"userName"`
-	Title     string `json:"title"`
-	URL       string `json:"url"`
-	Error     string `json:"error"`
-	Timestamp string `json:"timestamp"`
+	ID                string `json:"id"`
+	Kind              string `json:"kind"`
+	UserID            string `json:"userId"`
+	UserName          string `json:"userName"`
+	Title             string `json:"title"`
+	URL               string `json:"url"`
+	Error             string `json:"error"`
+	Timestamp         string `json:"timestamp"`
+	ConsecutiveErrors int    `json:"consecutiveErrors"`
 }
 
 type adminTrackersResponse struct {
 	FallbackTrackers []adminFallbackTracker `json:"fallbackTrackers"`
 	FailedTrackers   []adminFailedTracker   `json:"failedTrackers"`
 	GeneratedAt      string                 `json:"generatedAt"`
+}
+
+type adminServiceStatus struct {
+	Status               string  `json:"status"`
+	DatabaseStatus       string  `json:"databaseStatus"`
+	WorkerStatus         string  `json:"workerStatus"`
+	WorkerLastSeenAt     *string `json:"workerLastSeenAt"`
+	WorkerAgeSeconds     *int    `json:"workerAgeSeconds"`
+	ActiveTrackers       int     `json:"activeTrackers"`
+	FailingTrackers      int     `json:"failingTrackers"`
+	DueTrackers          int     `json:"dueTrackers"`
+	PendingNotifications int     `json:"pendingNotifications"`
+	DatabaseConnections  int32   `json:"databaseConnections"`
+	CheckedAt            string  `json:"checkedAt"`
+}
+
+// AdminStatus exposes operational state for the dashboard. Unlike /healthz it always
+// returns a JSON snapshot when the database query succeeds, so a stale worker remains
+// visible and diagnosable in the UI instead of becoming a generic failed request.
+func AdminStatus(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+
+		result := adminServiceStatus{
+			Status: "healthy", DatabaseStatus: "healthy", WorkerStatus: "unknown",
+			DatabaseConnections: pool.Stat().TotalConns(), CheckedAt: time.Now().UTC().Format(time.RFC3339),
+		}
+		var lastSeen *time.Time
+		err := pool.QueryRow(ctx, `
+			SELECT
+				(SELECT last_seen_at FROM service_heartbeats WHERE service = 'worker'),
+				COUNT(*) FILTER (WHERE status = 'active'),
+				COUNT(*) FILTER (WHERE status != 'deleted' AND last_error IS NOT NULL AND last_error != ''),
+				COUNT(*) FILTER (WHERE status = 'active' AND next_check_at <= now()),
+				(SELECT COUNT(*) FROM notifications WHERE status = 'pending')
+			FROM trackers
+		`).Scan(&lastSeen, &result.ActiveTrackers, &result.FailingTrackers, &result.DueTrackers, &result.PendingNotifications)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to load admin service status")
+			http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if lastSeen != nil {
+			formatted := lastSeen.UTC().Format(time.RFC3339)
+			age := int(time.Since(*lastSeen).Seconds())
+			result.WorkerLastSeenAt, result.WorkerAgeSeconds = &formatted, &age
+			if age <= 90 {
+				result.WorkerStatus = "healthy"
+			} else {
+				result.WorkerStatus, result.Status = "stale", "degraded"
+			}
+		} else {
+			result.WorkerStatus, result.Status = "missing", "degraded"
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+	}
 }
 
 // AdminAuth requires HTTP Basic Auth matching the configured admin username/password, so
@@ -349,7 +410,9 @@ func AdminAddProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
 
 		var (
 			entries []proxypool.ManualEntry
-			invalid []string
+			// Non-nil so the JSON response carries [] rather than null — the admin UI
+			// indexes into it.
+			invalid = []string{}
 			seen    = map[string]bool{}
 		)
 		for _, line := range strings.Split(strings.ReplaceAll(req.Text, "\r\n", "\n"), "\n") {
@@ -610,7 +673,8 @@ func loadAdminTrackers(ctx context.Context, pool *pgxpool.Pool) (*adminTrackersR
 	failedRows, err := pool.Query(ctx, `
 		(
 			SELECT t.id::text, 'tracker_error', u.id, COALESCE(NULLIF(u.name, ''), u.email),
-			       COALESCE(t.title, t.domain), t.url, t.last_error, t.last_checked_at::text
+			       COALESCE(t.title, t.domain), t.url, t.last_error, t.last_checked_at::text,
+			       t.consecutive_errors
 			FROM trackers t
 			JOIN "user" u ON u.id = t.user_id
 			WHERE t.status != 'deleted' AND t.last_error IS NOT NULL AND t.last_error != ''
@@ -624,7 +688,7 @@ func loadAdminTrackers(ctx context.Context, pool *pgxpool.Pool) (*adminTrackersR
 		)
 		UNION ALL
 		(
-			SELECT id, kind, user_id, user_name, title, url, error, timestamp
+			SELECT id, kind, user_id, user_name, title, url, error, timestamp, consecutive_errors
 			FROM (
 				SELECT DISTINCT ON (ef.user_id, ef.url)
 				       ef.id::text AS id,
@@ -634,7 +698,8 @@ func loadAdminTrackers(ctx context.Context, pool *pgxpool.Pool) (*adminTrackersR
 				       ef.url AS title,
 				       ef.url AS url,
 				       ef.error AS error,
-				       ef.created_at::text AS timestamp
+				       ef.created_at::text AS timestamp,
+				       1 AS consecutive_errors
 				FROM extraction_failures ef
 				JOIN "user" u ON u.id = ef.user_id
 				WHERE NOT EXISTS (
@@ -649,7 +714,7 @@ func loadAdminTrackers(ctx context.Context, pool *pgxpool.Pool) (*adminTrackersR
 				ORDER BY ef.user_id, ef.url, ef.created_at DESC
 			) latest_failures
 		)
-		ORDER BY 8 DESC NULLS LAST
+		ORDER BY 9 DESC, 8 DESC NULLS LAST
 		LIMIT 100
 	`, adminSearchExtractionMethods)
 	if err != nil {
@@ -658,7 +723,7 @@ func loadAdminTrackers(ctx context.Context, pool *pgxpool.Pool) (*adminTrackersR
 	defer failedRows.Close()
 	for failedRows.Next() {
 		var f adminFailedTracker
-		if err := failedRows.Scan(&f.ID, &f.Kind, &f.UserID, &f.UserName, &f.Title, &f.URL, &f.Error, &f.Timestamp); err != nil {
+		if err := failedRows.Scan(&f.ID, &f.Kind, &f.UserID, &f.UserName, &f.Title, &f.URL, &f.Error, &f.Timestamp, &f.ConsecutiveErrors); err != nil {
 			return nil, err
 		}
 		resp.FailedTrackers = append(resp.FailedTrackers, f)

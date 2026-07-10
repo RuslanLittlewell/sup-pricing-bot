@@ -2,6 +2,7 @@ package notifier
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,9 +25,12 @@ var notifierTexts = map[string]map[string]string{
 		"out_of_stock":        "❌ Product is out of stock\n\nProduct: %s\nLast price: %s\n\nOpen product:\n%s",
 		"stock_changed":       "📦 Stock status changed\n\nProduct: %s\nBefore: %s\nNow: %s\nPrice: %s\n\nOpen product:\n%s",
 		"extraction_failed":   "⚠️ Price check failed\n\nProduct: %s\nCould not extract the price. The site may have changed.\n\nOpen product:\n%s",
+		"manual_check_price":  "✅ Check finished\n\nProduct: %s\nPrice unchanged: %s\n\nOpen product:\n%s",
+		"manual_check_stock":  "✅ Check finished\n\nProduct: %s\nStock status unchanged: %s\n\nOpen product:\n%s",
 		"unknown":             "unknown",
 		"stock_in":            "in stock",
 		"stock_out":           "out of stock",
+		"stop_tracking":       "Stop tracking",
 	},
 	"ru": {
 		"price_changed":       "🔔 Цена изменилась\n\nТовар: %s\nИзначальная цена: %s\nПрошлая цена: %s\nТекущая цена: %s\n\nОткрыть товар:\n%s",
@@ -35,9 +39,12 @@ var notifierTexts = map[string]map[string]string{
 		"out_of_stock":        "❌ Товар закончился\n\nТовар: %s\nПоследняя цена: %s\n\nОткрыть товар:\n%s",
 		"stock_changed":       "📦 Статус наличия изменился\n\nТовар: %s\nБыло: %s\nСтало: %s\nЦена: %s\n\nОткрыть товар:\n%s",
 		"extraction_failed":   "⚠️ Ошибка проверки цены\n\nТовар: %s\nНе удалось извлечь цену. Возможно, сайт изменился.\n\nОткрыть товар:\n%s",
+		"manual_check_price":  "✅ Проверка завершена\n\nТовар: %s\nЦена не изменилась: %s\n\nОткрыть товар:\n%s",
+		"manual_check_stock":  "✅ Проверка завершена\n\nТовар: %s\nНаличие не изменилось: %s\n\nОткрыть товар:\n%s",
 		"unknown":             "неизвестно",
 		"stock_in":            "в наличии",
 		"stock_out":           "нет в наличии",
+		"stop_tracking":       "Остановить отслеживание",
 	},
 	"pl": {
 		"price_changed":       "🔔 Cena się zmieniła\n\nProdukt: %s\nCena początkowa: %s\nPoprzednia cena: %s\nAktualna cena: %s\n\nOtwórz produkt:\n%s",
@@ -46,9 +53,12 @@ var notifierTexts = map[string]map[string]string{
 		"out_of_stock":        "❌ Produkt jest niedostępny\n\nProdukt: %s\nOstatnia cena: %s\n\nOtwórz produkt:\n%s",
 		"stock_changed":       "📦 Status dostępności się zmienił\n\nProdukt: %s\nByło: %s\nTeraz: %s\nCena: %s\n\nOtwórz produkt:\n%s",
 		"extraction_failed":   "⚠️ Błąd sprawdzania ceny\n\nProdukt: %s\nNie udało się pobrać ceny. Strona mogła się zmienić.\n\nOtwórz produkt:\n%s",
+		"manual_check_price":  "✅ Sprawdzanie zakończone\n\nProdukt: %s\nCena bez zmian: %s\n\nOtwórz produkt:\n%s",
+		"manual_check_stock":  "✅ Sprawdzanie zakończone\n\nProdukt: %s\nDostępność bez zmian: %s\n\nOtwórz produkt:\n%s",
 		"unknown":             "nieznany",
 		"stock_in":            "dostępny",
 		"stock_out":           "niedostępny",
+		"stop_tracking":       "Zatrzymaj śledzenie",
 	},
 }
 
@@ -122,11 +132,11 @@ func (n *Notifier) SendPending(ctx context.Context) {
 			n.log.Error().Err(err).Msg("failed to scan notification")
 			continue
 		}
-		n.send(ctx, id, notifType, title, url, oldPrice, newPrice, currency, oldStockStatus, newStockStatus, currentPrice, trackerCurrency, initialPrice, telegramChatID, notifierLanguage(lang))
+		n.send(ctx, id, notifType, trackerID, title, url, oldPrice, newPrice, currency, oldStockStatus, newStockStatus, currentPrice, trackerCurrency, initialPrice, telegramChatID, notifierLanguage(lang))
 	}
 }
 
-func (n *Notifier) send(ctx context.Context, id, notifType string, title *string, url string,
+func (n *Notifier) send(ctx context.Context, id, notifType, trackerID string, title *string, url string,
 	oldPrice, newPrice *float64, currency *string,
 	oldStockStatus, newStockStatus *string,
 	currentPrice *float64, trackerCurrency string, initialPrice float64,
@@ -180,14 +190,38 @@ func (n *Notifier) send(ctx context.Context, id, notifType string, title *string
 	case "extraction_failed":
 		text = fmt.Sprintf(nt(lang, "extraction_failed"), displayTitle, url)
 
+	case "manual_check_ok":
+		// The worker sets new_price for price trackers and new_stock_status for
+		// stock trackers; whichever is present decides the wording.
+		if newPrice != nil {
+			text = fmt.Sprintf(nt(lang, "manual_check_price"), displayTitle, formatMoney(*newPrice), url)
+		} else {
+			statusStr := nt(lang, "unknown")
+			if newStockStatus != nil {
+				statusStr = stockLabel(lang, *newStockStatus)
+			}
+			text = fmt.Sprintf(nt(lang, "manual_check_stock"), displayTitle, statusStr, url)
+		}
+
 	default:
 		n.log.Warn().Str("type", notifType).Msg("unknown notification type")
 		return
 	}
 
-	if err := n.tg.SendMessage(chatID, text); err != nil {
-		n.log.Error().Err(err).Str("notification_id", id).Msg("failed to send notification")
-		n.pool.Exec(ctx, `UPDATE notifications SET status = 'failed', error_message = $2 WHERE id = $1`, id, err.Error())
+	var sendErr error
+	if notifType == "price_changed" || notifType == "back_in_stock" {
+		markup, _ := json.Marshal(map[string]interface{}{
+			"inline_keyboard": [][]map[string]string{{{
+				"text": nt(lang, "stop_tracking"), "callback_data": "tracker:complete:" + trackerID,
+			}}},
+		})
+		sendErr = n.tg.SendMessageWithMarkup(chatID, text, markup)
+	} else {
+		sendErr = n.tg.SendMessage(chatID, text)
+	}
+	if sendErr != nil {
+		n.log.Error().Err(sendErr).Str("notification_id", id).Msg("failed to send notification")
+		n.pool.Exec(ctx, `UPDATE notifications SET status = 'failed', error_message = $2 WHERE id = $1`, id, sendErr.Error())
 		return
 	}
 

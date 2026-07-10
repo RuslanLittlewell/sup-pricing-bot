@@ -108,7 +108,7 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     19,
-		Description: "add internal admin plan (effectively unlimited trackers, 5-minute scans)",
+		Description: "add internal admin plan (effectively unlimited trackers, hourly scans)",
 		SQL:         migrationV19,
 	},
 	{
@@ -125,6 +125,26 @@ var Migrations = []Migration{
 		Version:     22,
 		Description: "fixed per-plan scan intervals (free 5h, basic/trial 2.5h, pro 1h) and pro cap 25",
 		SQL:         migrationV22,
+	},
+	{
+		Version:     23,
+		Description: "add successful tracker completion history",
+		SQL:         migrationV23,
+	},
+	{
+		Version:     24,
+		Description: "set admin tracker interval to one hour",
+		SQL:         migrationV24,
+	},
+	{
+		Version:     25,
+		Description: "flag manually requested checks so the worker always reports their result",
+		SQL:         migrationV25,
+	},
+	{
+		Version:     26,
+		Description: "record service heartbeats for readiness monitoring",
+		SQL:         migrationV26,
 	},
 }
 
@@ -531,11 +551,10 @@ CREATE TABLE IF NOT EXISTS scrape_fingerprints (
 
 // migrationV19 seeds an internal 'admin' plan — not offered in /plans (see
 // sendPlansMenu's fixed plan list), only ever granted directly via a DB update for
-// specific users. Effectively-unlimited trackers, and a 5-minute scan interval faster
-// than any paid tier, for testing/operating the bot without plan limits getting in the way.
+// specific users. It has effectively-unlimited trackers and the same hourly interval as Pro.
 const migrationV19 = `
 INSERT INTO plans (code, name, max_trackers, check_interval_minutes, price_history_days, is_paid)
-VALUES ('admin', 'Admin', 9999, 5, 365, false)
+VALUES ('admin', 'Admin', 9999, 60, 365, false)
 ON CONFLICT (code) DO UPDATE SET
     name = EXCLUDED.name,
     max_trackers = EXCLUDED.max_trackers,
@@ -584,6 +603,48 @@ WHERE p.code = COALESCE((
         LIMIT 1
     ), 'free')
   AND t.check_interval_minutes IS DISTINCT FROM p.check_interval_minutes;
+`
+
+// Completed trackers stay in the trackers table so their product and last observed
+// values remain available in the user's successful-tracker history. The worker already
+// selects only active trackers, so changing status to completed stops future checks.
+const migrationV23 = `
+ALTER TABLE trackers ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_trackers_user_completed
+    ON trackers(user_id, completed_at DESC) WHERE status = 'completed';
+`
+
+// Admins retain their unlimited allowance, but automatic checks run hourly. An admin
+// can still request an immediate individual check from the Telegram tracker card.
+const migrationV24 = `
+UPDATE plans SET check_interval_minutes = 60 WHERE code = 'admin';
+UPDATE trackers t SET
+    check_interval_minutes = 60,
+    next_check_at = LEAST(t.next_check_at, now() + interval '1 hour'),
+    updated_at = now()
+WHERE t.status = 'active'
+  AND EXISTS (
+      SELECT 1 FROM user_plans up
+      WHERE up.user_id = t.user_id
+        AND up.plan_code = 'admin'
+        AND (up.expires_at IS NULL OR up.expires_at > now())
+  );
+`
+
+// A manual check (admin's 🔄 button) must always produce a Telegram reply — updated
+// tracker info even when nothing changed, or the extraction error — unlike scheduled
+// checks, which only notify on actual changes. The flag marks the next worker pass as
+// manually requested; the worker clears it and reports the outcome.
+const migrationV25 = `
+ALTER TABLE trackers ADD COLUMN IF NOT EXISTS manual_check_pending BOOLEAN NOT NULL DEFAULT false;
+`
+
+const migrationV26 = `
+CREATE TABLE IF NOT EXISTS service_heartbeats (
+    service TEXT PRIMARY KEY,
+    last_seen_at TIMESTAMPTZ NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {
