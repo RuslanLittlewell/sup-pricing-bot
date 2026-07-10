@@ -45,20 +45,6 @@ func formatMoney(price float64) string {
 	return fmt.Sprintf("💰 %.2f", price)
 }
 
-func formatInterval(lang string, minutes int) string {
-	if minutes <= 0 {
-		minutes = 180
-	}
-	if minutes%60 == 0 {
-		hours := minutes / 60
-		if hours == 1 {
-			return tr(lang, "interval_every_hour")
-		}
-		return fmt.Sprintf(tr(lang, "interval_every_hours"), hours)
-	}
-	return fmt.Sprintf(tr(lang, "interval_every_minutes"), minutes)
-}
-
 func normalizePriceNumber(text string) string {
 	normalized := strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {

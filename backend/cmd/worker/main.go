@@ -45,6 +45,7 @@ func main() {
 
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
+	go runHeartbeat(ctx, pool, log)
 
 	rend, err := renderer.New(cfg.ScraperCookies, cfg.ScraperProxy)
 	if err != nil {
@@ -65,7 +66,7 @@ func main() {
 	proxyStore := proxypool.NewStore(pool)
 	searchFallback := extractor.NewSearchFallback(proxyStore)
 	if searchFallback == nil {
-		log.Warn().Msg("search fallback disabled: set OPEN_SERP_BASE_URL, SERPER_API_KEY, or SERPAPI_KEY")
+		log.Warn().Msg("search fallback disabled: set OPEN_SERP_BASE_URL, SEARXNG_BASE_URL, SERPER_API_KEY, or SERPAPI_KEY")
 	} else {
 		log.Info().Str("fallback", searchFallback.Domain()).Msg("search fallback enabled")
 	}
@@ -96,6 +97,29 @@ func main() {
 			sendNotifications()
 		case <-ctx.Done():
 			log.Info().Msg("worker shutting down")
+			return
+		}
+	}
+}
+
+func runHeartbeat(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger) {
+	update := func() {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO service_heartbeats (service, last_seen_at)
+			VALUES ('worker', now())
+			ON CONFLICT (service) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at
+		`); err != nil && ctx.Err() == nil {
+			log.Error().Err(err).Msg("failed to update worker heartbeat")
+		}
+	}
+	update()
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			update()
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -142,7 +166,7 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 
 	rows, err := pool.Query(ctx, `
 		SELECT id, url, extraction_rule, currency, current_price, previous_price, current_stock_status,
-		       consecutive_errors, check_interval_minutes, tracking_mode
+		       consecutive_errors, check_interval_minutes, tracking_mode, manual_check_pending
 		FROM trackers
 		WHERE status = 'active' AND next_check_at <= now()
 		ORDER BY next_check_at
@@ -167,21 +191,22 @@ func processTrackers(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Ren
 			consecutiveErrors  int
 			checkInterval      int
 			trackingMode       string
+			manualCheck        bool
 		)
-		if err := rows.Scan(&id, &url, &extractionRuleJSON, &currency, &currentPrice, &previousPrice, &currentStockStatus, &consecutiveErrors, &checkInterval, &trackingMode); err != nil {
+		if err := rows.Scan(&id, &url, &extractionRuleJSON, &currency, &currentPrice, &previousPrice, &currentStockStatus, &consecutiveErrors, &checkInterval, &trackingMode, &manualCheck); err != nil {
 			log.Error().Err(err).Msg("failed to scan tracker")
 			continue
 		}
 		if trackingMode == "stock" {
-			processStockTracker(ctx, pool, fetcher, id, url, extractionRuleJSON, consecutiveErrors, checkInterval, log)
+			processStockTracker(ctx, pool, fetcher, id, url, extractionRuleJSON, consecutiveErrors, checkInterval, manualCheck, log)
 			continue
 		}
-		processTracker(ctx, pool, rend, fetcher, attr, generic, searchFallback, id, url, extractionRuleJSON, currency, currentPrice, previousPrice, consecutiveErrors, checkInterval, log)
+		processTracker(ctx, pool, rend, fetcher, attr, generic, searchFallback, id, url, extractionRuleJSON, currency, currentPrice, previousPrice, consecutiveErrors, checkInterval, manualCheck, log)
 	}
 }
 
 func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extractor.PageFetcher,
-	id, url string, extractionRuleJSON []byte, consecutiveErrors, checkInterval int, log zerolog.Logger) {
+	id, url string, extractionRuleJSON []byte, consecutiveErrors, checkInterval int, manualCheck bool, log zerolog.Logger) {
 	if checkInterval <= 0 {
 		checkInterval = 180
 	}
@@ -191,14 +216,14 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 	body, fetchMethod, err := fetcher.Fetch(url)
 	if err != nil {
 		log.Error().Err(err).Str("tracker_id", id).Msg("stock fetch failed")
-		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
+		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, manualCheck, log)
 		return
 	}
 
 	stockStatus, stockMethod, err := extractor.DetectStockStatus(extractionRuleJSON, body)
 	if err != nil {
 		log.Error().Err(err).Str("tracker_id", id).Msg("stock detection failed")
-		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
+		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, manualCheck, log)
 		return
 	}
 
@@ -218,11 +243,13 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 			next_check_at = now() + ($3 * interval '1 minute'),
 			consecutive_errors = 0,
 			last_error = NULL,
+			manual_check_pending = false,
 			updated_at = now()
 		WHERE id = $1
 	`, id, stockStatus, checkInterval)
 
-	if prevStockStatus != "" && prevStockStatus != stockStatus {
+	statusChanged := prevStockStatus != "" && prevStockStatus != stockStatus
+	if statusChanged {
 		notifType := "stock_changed"
 		if stockStatus == "in_stock" {
 			notifType = "back_in_stock"
@@ -234,6 +261,14 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 			SELECT gen_random_uuid(), user_id, $1, $2, $3, $4, 'pending'
 			FROM trackers WHERE id = $1
 		`, id, notifType, prevStockStatus, stockStatus)
+	} else if manualCheck {
+		// A manual check promises the admin a result either way; the change
+		// notification above covers the changed case.
+		pool.Exec(ctx, `
+			INSERT INTO notifications (id, user_id, tracker_id, type, new_stock_status, status)
+			SELECT gen_random_uuid(), user_id, $1, 'manual_check_ok', $2, 'pending'
+			FROM trackers WHERE id = $1
+		`, id, stockStatus)
 	}
 
 	log.Info().Str("tracker_id", id).Str("stock_status", stockStatus).Msg("stock tracker checked successfully")
@@ -242,7 +277,7 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Renderer, fetcher *extractor.PageFetcher,
 	attr *extractor.AttributeExtractor, generic *extractor.GenericExtractor, searchFallback extractor.Extractor,
 	id, url string, extractionRuleJSON []byte, currency string, currentPrice, previousPrice *float64,
-	consecutiveErrors int, checkInterval int, log zerolog.Logger) {
+	consecutiveErrors int, checkInterval int, manualCheck bool, log zerolog.Logger) {
 	if checkInterval <= 0 {
 		checkInterval = 180
 	}
@@ -252,7 +287,7 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 	newPrice, newCurrency, stockStatus, extractionMethod, fetchMethod, err := extractTrackerPrice(ctx, rend, fetcher, attr, generic, searchFallback, url, extractionRuleJSON, currency, currentPrice)
 	if err != nil {
 		log.Error().Err(err).Str("tracker_id", id).Msg("extraction failed")
-		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, log)
+		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, manualCheck, log)
 		return
 	}
 
@@ -284,6 +319,7 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 			next_check_at = now() + ($4 * interval '1 minute'),
 			consecutive_errors = 0,
 			last_error = NULL,
+			manual_check_pending = false,
 			updated_at = now()
 		WHERE id = $1
 	`, id, newPrice, stockStatus, checkInterval)
@@ -298,6 +334,14 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 			SELECT gen_random_uuid(), user_id, $1, 'price_changed', $2, $3, $4, 'pending'
 			FROM trackers WHERE id = $1
 		`, id, oldPriceParam, newPrice, newCurrency)
+	} else if manualCheck {
+		// A manual check promises the admin a result either way; the price_changed
+		// notification above covers the changed case.
+		pool.Exec(ctx, `
+			INSERT INTO notifications (id, user_id, tracker_id, type, new_price, currency, status)
+			SELECT gen_random_uuid(), user_id, $1, 'manual_check_ok', $2, $3, 'pending'
+			FROM trackers WHERE id = $1
+		`, id, newPrice, newCurrency)
 	}
 
 	// stockStatus/stock_points above are just incidental telemetry — most price
@@ -400,7 +444,7 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 
 func isSearchFallbackRuleType(ruleType string) bool {
 	switch ruleType {
-	case "openserp_search_result", "openserp_extract", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet", "gemini_url_context":
+	case "openserp_search_result", "openserp_extract", "searxng_exact_offer", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet", "gemini_url_context":
 		return true
 	default:
 		return false
@@ -512,7 +556,7 @@ func bestPriceCandidate(candidates []extractor.PriceCandidate, referencePrice *f
 	return best, bestPrice, found
 }
 
-func handleExtractionError(ctx context.Context, pool *pgxpool.Pool, id, errMsg string, consecutiveErrors int, checkInterval int, log zerolog.Logger) {
+func handleExtractionError(ctx context.Context, pool *pgxpool.Pool, id, errMsg string, consecutiveErrors int, checkInterval int, manualCheck bool, log zerolog.Logger) {
 	if checkInterval <= 0 {
 		checkInterval = 180
 	}
@@ -529,6 +573,7 @@ func handleExtractionError(ctx context.Context, pool *pgxpool.Pool, id, errMsg s
 			last_checked_at = now(),
 			next_check_at = now() + ($5 * interval '1 minute'),
 			status = $4,
+			manual_check_pending = false,
 			updated_at = now()
 		WHERE id = $1
 	`, id, newConsecutive, errMsg, newStatus, checkInterval)
@@ -537,6 +582,16 @@ func handleExtractionError(ctx context.Context, pool *pgxpool.Pool, id, errMsg s
 		INSERT INTO price_points (id, tracker_id, price, currency, source, status, error_message)
 		VALUES (gen_random_uuid(), $1, NULL, '', 'worker_check', 'failed', $2)
 	`, id, errMsg)
+
+	// Scheduled checks fail silently (the error only surfaces in status/history), but a
+	// manual check promised the admin a result, so the failure is reported too.
+	if manualCheck {
+		pool.Exec(ctx, `
+			INSERT INTO notifications (id, user_id, tracker_id, type, status)
+			SELECT gen_random_uuid(), user_id, $1, 'extraction_failed', 'pending'
+			FROM trackers WHERE id = $1
+		`, id)
+	}
 
 	log.Warn().Str("tracker_id", id).Int("consecutive", newConsecutive).Msg("extraction error recorded")
 }

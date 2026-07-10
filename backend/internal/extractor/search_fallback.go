@@ -7,7 +7,7 @@ import (
 )
 
 // NewSearchFallback returns the search-backed fallback chain, cheapest tier first:
-// OpenSERP (self-hosted, free), then Serper, then SerpAPI (both paid search APIs), and
+// OpenSERP and SearXNG (both self-hosted/free), then Serper and SerpAPI (paid), and
 // finally Gemini (an LLM that fetches the page itself via Google's infrastructure — the
 // most capable at getting past bot protection, but the most expensive, so it's the
 // last resort). proxies may be nil (no pool wired up) — OpenSERP then just uses its own
@@ -16,6 +16,9 @@ func NewSearchFallback(proxies *proxypool.Store) Extractor {
 	var chain fallbackChain
 	if openserp := NewOpenSERP(proxies); openserp != nil {
 		chain.extractors = append(chain.extractors, openserp)
+	}
+	if searxng := NewSearXNG(); searxng != nil {
+		chain.extractors = append(chain.extractors, searxng)
 	}
 	if serper := NewSerper(); serper != nil {
 		chain.extractors = append(chain.extractors, serper)

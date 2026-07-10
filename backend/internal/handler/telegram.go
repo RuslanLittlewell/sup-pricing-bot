@@ -132,8 +132,6 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 			handleListTrackers(ctx, pool, tg, from.ID, userID, lang, log)
 		case strings.HasPrefix(text, "/add "):
 			handleAddTracker(ctx, pool, tg, from.ID, userID, lang, text[5:], log, rend, cfg.ScraperCookies, cfg.ScraperProxy)
-		case strings.HasPrefix(text, "/delete "):
-			handleDeleteTracker(ctx, pool, tg, from.ID, userID, lang, text[8:], log)
 		case strings.HasPrefix(text, "/history "):
 			handleTrackerHistory(ctx, pool, tg, from.ID, userID, lang, text[9:], log)
 		// Persistent reply-keyboard taps arrive as plain messages carrying the button label.
@@ -144,6 +142,9 @@ func TelegramWebhook(pool *pgxpool.Pool, cfg *config.Config, tg *telegram.Client
 		case isButtonLabel(text, "button_trackers"):
 			clearTelegramState(ctx, pool, from.ID)
 			handleListTrackers(ctx, pool, tg, from.ID, userID, lang, log)
+		case isButtonLabel(text, "button_success_history"):
+			clearTelegramState(ctx, pool, from.ID)
+			handleSuccessfulTrackerHistory(ctx, pool, tg, from.ID, userID, lang, log)
 		case isButtonLabel(text, "button_plans"):
 			clearTelegramState(ctx, pool, from.ID)
 			sendPlansMenu(ctx, pool, tg, from.ID, userID, lang)
@@ -240,6 +241,9 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	case data == "menu:list":
 		clearTelegramState(ctx, pool, chatID)
 		handleListTrackers(ctx, pool, tg, chatID, userID, lang, log)
+	case data == "menu:success-history":
+		clearTelegramState(ctx, pool, chatID)
+		handleSuccessfulTrackerHistory(ctx, pool, tg, chatID, userID, lang, log)
 	case data == "menu:back":
 		clearTelegramState(ctx, pool, chatID)
 		sendMainMenu(tg, chatID, lang, tr(lang, "menu_start"))
@@ -359,6 +363,50 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 				log.Warn().Err(err).Int("message_id", messageID).Msg("failed to delete tracker card message")
 			}
 		}
+	case strings.HasPrefix(data, "tracker:complete:"):
+		trackerID := strings.TrimPrefix(data, "tracker:complete:")
+		tag, err := pool.Exec(ctx, `
+			UPDATE trackers SET status = 'completed', completed_at = now(), updated_at = now()
+			WHERE id::text = $1 AND user_id = $2 AND status = 'active'
+		`, trackerID, userID)
+		if err != nil {
+			log.Error().Err(err).Str("tracker_id", trackerID).Msg("failed to complete tracker")
+			SendTelegramMessage(tg, chatID, tr(lang, "tracker_complete_failed"))
+			return
+		}
+		if tag.RowsAffected() == 0 {
+			SendTelegramMessage(tg, chatID, tr(lang, "tracker_not_found"))
+			return
+		}
+		if messageID != 0 {
+			if err := tg.DeleteMessage(chatID, messageID); err != nil {
+				log.Warn().Err(err).Int("message_id", messageID).Msg("failed to delete completed tracker notification")
+			}
+		}
+		markup := makeInlineKeyboard([]inlineButton{button(tr(lang, "button_success_history"), "menu:success-history")})
+		_ = tg.SendMessageWithMarkup(chatID, tr(lang, "tracker_added_to_history"), markup)
+	case strings.HasPrefix(data, "tracker:check:"):
+		// Button visibility is not authorization: old callbacks can be replayed after a
+		// plan change, so the admin plan is always verified server-side.
+		if getPlanLimits(ctx, pool, userID).code != "admin" {
+			SendTelegramMessage(tg, chatID, tr(lang, "manual_check_admin_only"))
+			return
+		}
+		trackerID := strings.TrimPrefix(data, "tracker:check:")
+		tag, err := pool.Exec(ctx, `
+			UPDATE trackers SET next_check_at = now(), manual_check_pending = true, updated_at = now()
+			WHERE id::text LIKE $1 || '%' AND user_id = $2 AND status = 'active'
+		`, trackerID, userID)
+		if err != nil {
+			log.Error().Err(err).Str("tracker_id", trackerID).Msg("failed to queue manual tracker check")
+			SendTelegramMessage(tg, chatID, tr(lang, "manual_check_failed"))
+			return
+		}
+		if tag.RowsAffected() == 0 {
+			SendTelegramMessage(tg, chatID, tr(lang, "tracker_not_found"))
+			return
+		}
+		SendTelegramMessage(tg, chatID, tr(lang, "manual_check_queued"))
 	default:
 		sendMainMenu(tg, chatID, lang, tr(lang, "menu_unknown_button"))
 	}

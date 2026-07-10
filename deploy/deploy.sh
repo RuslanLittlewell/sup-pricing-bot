@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VPS_HOST="${VPS_HOST:-167.233.159.2}"
+VPS_HOST="${VPS_HOST:-87.120.196.46}"
 VPS_USER="${VPS_USER:-root}"
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/price-checker-bot}"
 
 # Use real DNS names that point to VPS_HOST. Examples:
 #   APP_DOMAIN=pricebot.example.com
 #   API_DOMAIN=api.pricebot.example.com
-APP_DOMAIN="${APP_DOMAIN:-pricebot.littlewell-app.work}"
-API_DOMAIN="${API_DOMAIN:-pricebot-api.littlewell-app.work}"
+APP_DOMAIN="${APP_DOMAIN:-surpricebot.com}"
+API_DOMAIN="${API_DOMAIN:-pricebot-api.surpricebot.com}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@${APP_DOMAIN}}"
-ENABLE_CERTBOT="${ENABLE_CERTBOT:-0}"
+ENABLE_CERTBOT="${ENABLE_CERTBOT:-1}"
 FRONTEND_HOST_PORT="${FRONTEND_HOST_PORT:-13000}"
 BACKEND_HOST_PORT="${BACKEND_HOST_PORT:-18080}"
 
@@ -147,9 +147,65 @@ run_remote "cd '${DEPLOY_DIR}' && set -a && . ./.env.production && set +a && exp
 echo "Container status:"
 run_remote "cd '${DEPLOY_DIR}' && set -a && . ./.env.production && set +a && export COMPOSE_FILE=deploy/docker-compose.prod.yml && if docker compose version >/dev/null 2>&1; then compose_cmd='docker compose'; elif command -v docker-compose >/dev/null 2>&1; then compose_cmd='docker-compose'; elif command -v docker-compose-v2 >/dev/null 2>&1; then compose_cmd='docker-compose-v2'; else echo 'Docker Compose is not installed. Install docker-compose-plugin, docker-compose-v2, or docker-compose.' >&2; exit 1; fi; \$compose_cmd ps"
 
-echo "Configuring nginx reverse proxy..."
-run_remote "if ! command -v nginx >/dev/null 2>&1; then apt-get update && apt-get install -y nginx; fi
-cat > /etc/nginx/sites-available/price-checker-bot.conf <<'NGINX'
+# nginx_site_conf prints the full site config. With SSL (cert already issued) it
+# includes the 443 servers directly, so a deploy never passes through an HTTP-only
+# intermediate state — the old flow rewrote the config without any `listen 443` and
+# relied on certbot to re-add it, leaving HTTPS down for the window in between (or
+# until the next deploy, if the script died before the certbot step). Nginx runtime
+# variables ($host etc.) are backslash-escaped; everything else expands locally.
+nginx_site_conf() {
+  local ssl="$1" # "yes" once /etc/letsencrypt/live/${APP_DOMAIN} exists, else "no"
+  if [[ "$ssl" == "yes" ]]; then
+    cat <<NGINX
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${APP_DOMAIN} ${API_DOMAIN};
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ${APP_DOMAIN};
+    ssl_certificate /etc/letsencrypt/live/${APP_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${APP_DOMAIN}/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:${FRONTEND_HOST_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ${API_DOMAIN};
+    ssl_certificate /etc/letsencrypt/live/${APP_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${APP_DOMAIN}/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:${BACKEND_HOST_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+NGINX
+  else
+    cat <<NGINX
 server {
     listen 80;
     listen [::]:80;
@@ -163,7 +219,7 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \"upgrade\";
+        proxy_set_header Connection "upgrade";
     }
 }
 
@@ -182,16 +238,28 @@ server {
     }
 }
 NGINX
-ln -sf /etc/nginx/sites-available/price-checker-bot.conf /etc/nginx/sites-enabled/price-checker-bot.conf
-rm -f /etc/nginx/sites-enabled/default
-sed -i '/return 301 https:\/\/\$host\$request_uri;/d' /etc/nginx/sites-available/price-checker-bot.conf
-sed -i '/if (\$host = ${APP_DOMAIN})/,+2d' /etc/nginx/sites-available/price-checker-bot.conf
-sed -i '/if (\$host = ${API_DOMAIN})/,+2d' /etc/nginx/sites-available/price-checker-bot.conf
-nginx -t
-systemctl reload nginx"
+  fi
+}
 
-if [[ "${ENABLE_CERTBOT}" = "1" ]]; then
-  echo "Configuring HTTPS certificates with certbot..."
+echo "Configuring nginx reverse proxy..."
+run_remote "if ! command -v nginx >/dev/null 2>&1; then apt-get update && apt-get install -y nginx; fi"
+CERT_EXISTS=$(run_remote "if [[ -f '/etc/letsencrypt/live/${APP_DOMAIN}/fullchain.pem' ]]; then echo yes; else echo no; fi")
+# Install the config only when it actually changed, so routine deploys don't touch
+# a working nginx at all.
+nginx_site_conf "$CERT_EXISTS" | run_remote "cat > /tmp/price-checker-bot.conf.new
+if cmp -s /tmp/price-checker-bot.conf.new /etc/nginx/sites-available/price-checker-bot.conf; then
+  echo 'nginx config unchanged; skipping reload.'
+  rm -f /tmp/price-checker-bot.conf.new
+else
+  mv /tmp/price-checker-bot.conf.new /etc/nginx/sites-available/price-checker-bot.conf
+  ln -sf /etc/nginx/sites-available/price-checker-bot.conf /etc/nginx/sites-enabled/price-checker-bot.conf
+  rm -f /etc/nginx/sites-enabled/default
+  nginx -t
+  systemctl reload nginx
+fi"
+
+if [[ "${ENABLE_CERTBOT}" = "1" && "$CERT_EXISTS" != "yes" ]]; then
+  echo "Configuring HTTPS certificates with certbot (first-time issuance)..."
   run_remote "if ! command -v certbot >/dev/null 2>&1; then apt-get update && apt-get install -y certbot python3-certbot-nginx; fi
 certbot --nginx \
   --non-interactive \
@@ -201,6 +269,8 @@ certbot --nginx \
   -d '${API_DOMAIN}'
 nginx -t
 systemctl reload nginx"
+elif [[ "${ENABLE_CERTBOT}" = "1" ]]; then
+  echo "Certificate already issued; certbot's renewal timer keeps it fresh."
 else
   echo "Skipping certbot because ENABLE_CERTBOT=${ENABLE_CERTBOT}."
 fi

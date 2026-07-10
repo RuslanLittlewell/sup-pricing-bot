@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
+  addProxies,
   checkProxy,
   deleteDeadProxies,
   fetchProxies,
@@ -31,6 +32,18 @@ function statusBadge(status: string) {
   }
 }
 
+// countryToFlag turns a 2-letter ISO country code into its flag emoji by mapping each
+// letter to its regional-indicator symbol. Falls back to a globe for missing/unknown
+// codes so the column always renders something.
+function countryToFlag(cc: string): string {
+  if (!/^[a-zA-Z]{2}$/.test(cc)) return '🌐'
+  const codePoints = cc
+    .toUpperCase()
+    .split('')
+    .map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)
+  return String.fromCodePoint(...codePoints)
+}
+
 export function ProxiesPage({
   credentials,
   onAuthFailure,
@@ -43,6 +56,12 @@ export function ProxiesPage({
   const [deleting, setDeleting] = useState(false)
   const [checkingId, setCheckingId] = useState<string | null>(null)
   const [rechecking, setRechecking] = useState(false)
+
+  const [showAdd, setShowAdd] = useState(false)
+  const [addText, setAddText] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
+  const [addResult, setAddResult] = useState<{ added: number; invalid: string[] } | null>(null)
 
   useEffect(() => {
     fetchProxies(credentials)
@@ -106,6 +125,30 @@ export function ProxiesPage({
     }
   }
 
+  function openAdd() {
+    setAddText('')
+    setAddError(null)
+    setAddResult(null)
+    setShowAdd(true)
+  }
+
+  async function handleAdd() {
+    setAdding(true)
+    setAddError(null)
+    setAddResult(null)
+    try {
+      const result = await addProxies(credentials, addText)
+      setAddResult(result)
+      setAddText('')
+      setProxies(await fetchProxies(credentials))
+    } catch (err) {
+      setAddError((err as Error).message)
+      onAuthFailure(err)
+    } finally {
+      setAdding(false)
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -121,6 +164,9 @@ export function ProxiesPage({
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
+            <Button size="sm" onClick={openAdd}>
+              Add proxies
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -159,8 +205,7 @@ export function ProxiesPage({
             {proxies.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="text-muted-foreground">
-                  No proxies yet — the pool refreshes hourly, or wait for the worker's
-                  next cycle.
+                  No proxies yet — add some, or wait for the worker's next cycle.
                 </TableCell>
               </TableRow>
             ) : (
@@ -175,7 +220,15 @@ export function ProxiesPage({
                       </Badge>
                     )}
                   </TableCell>
-                  <TableCell>{p.countryCode || '—'}</TableCell>
+                  <TableCell>
+                    <span
+                      className="text-lg"
+                      title={p.countryCode || 'unknown'}
+                      aria-label={p.countryCode || 'unknown'}
+                    >
+                      {countryToFlag(p.countryCode)}
+                    </span>
+                  </TableCell>
                   <TableCell>
                     <Badge variant="outline">{p.source}</Badge>
                   </TableCell>
@@ -203,6 +256,59 @@ export function ProxiesPage({
           </TableBody>
         </Table>
       </CardContent>
+
+      {showAdd && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !adding && setShowAdd(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-lg border bg-background p-6 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold">Add proxies</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              One per line, in <code className="font-mono">host:port:user:pass</code> format
+              (<code className="font-mono">host:port</code> without auth also works). Paste the
+              provider's list and submit.
+            </p>
+            <textarea
+              className="mt-3 h-48 w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              placeholder={'31.59.20.176:6754:user:pass\n45.38.107.97:6014:user:pass'}
+              value={addText}
+              disabled={adding}
+              onChange={(e) => setAddText(e.target.value)}
+            />
+            {addError && <p className="mt-2 text-sm text-destructive">{addError}</p>}
+            {addResult && (
+              <div className="mt-2 text-sm">
+                <p className="text-green-600">Added {addResult.added} prox{addResult.added === 1 ? 'y' : 'ies'}.</p>
+                {addResult.invalid.length > 0 && (
+                  <div className="mt-1 text-muted-foreground">
+                    Skipped {addResult.invalid.length} unparseable line
+                    {addResult.invalid.length === 1 ? '' : 's'}:
+                    <pre className="mt-1 max-h-24 overflow-auto rounded bg-muted p-2 font-mono text-xs">
+                      {addResult.invalid.join('\n')}
+                    </pre>
+                  </div>
+                )}
+                <p className="mt-1 text-muted-foreground">
+                  New proxies start as “unknown” — use “Recheck dead &amp; unknown” to validate
+                  them now, or wait for the hourly sweep.
+                </p>
+              </div>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="outline" size="sm" disabled={adding} onClick={() => setShowAdd(false)}>
+                {addResult ? 'Close' : 'Cancel'}
+              </Button>
+              <Button size="sm" disabled={adding || !addText.trim()} onClick={handleAdd}>
+                {adding ? 'Submitting…' : 'Submit'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   )
 }

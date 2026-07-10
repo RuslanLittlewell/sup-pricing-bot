@@ -40,11 +40,11 @@ func getPlanLimits(ctx context.Context, pool *pgxpool.Pool, userID string) planL
 	return pl
 }
 
-// countActiveTrackers counts the trackers that occupy a plan slot (everything not deleted,
-// matching what /list shows).
+// countActiveTrackers counts only trackers that still occupy a plan slot. Completed
+// trackers remain as history but no longer consume the user's active-tracker allowance.
 func countActiveTrackers(ctx context.Context, pool *pgxpool.Pool, userID string) (int, error) {
 	var n int
-	err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM trackers WHERE user_id = $1 AND status != 'deleted'`, userID).Scan(&n)
+	err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM trackers WHERE user_id = $1 AND status = 'active'`, userID).Scan(&n)
 	return n, err
 }
 

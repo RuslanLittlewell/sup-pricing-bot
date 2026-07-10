@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
@@ -105,7 +106,7 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
 		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
 	)
-	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_created"), title, state.URL, formatMoney(state.InitialPrice), formatInterval(lang, interval), trackerID[:8]), markup)
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_created"), title, state.URL, formatMoney(state.InitialPrice), trackerID[:8]), markup)
 }
 
 // syncTrackerIntervalsToPlan re-points all of a user's active trackers to a plan's scan
@@ -119,7 +120,7 @@ func syncTrackerIntervalsToPlan(ctx context.Context, pool *pgxpool.Pool, userID 
 			check_interval_minutes = $2,
 			next_check_at = LEAST(next_check_at, now() + ($2 * interval '1 minute')),
 			updated_at = now()
-		WHERE user_id = $1 AND status != 'deleted'
+		WHERE user_id = $1 AND status = 'active'
 	`, userID, intervalMinutes)
 }
 
@@ -319,13 +320,13 @@ func createZaraSizeTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram
 type trackerListRow struct {
 	id, url, title, currency, stockStatus, status, trackingMode string
 	price                                                       *float64
-	interval                                                    int
 }
 
 func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string, log zerolog.Logger) {
+	isAdmin := getPlanLimits(ctx, pool, userID).code == "admin"
 	rows, err := pool.Query(ctx, `
-		SELECT id, url, COALESCE(title, domain), current_price, currency, current_stock_status, status, check_interval_minutes, tracking_mode
-		FROM trackers WHERE user_id = $1 AND status != 'deleted' ORDER BY created_at DESC
+		SELECT id, url, COALESCE(title, domain), current_price, currency, current_stock_status, status, tracking_mode
+		FROM trackers WHERE user_id = $1 AND status = 'active' ORDER BY created_at DESC
 	`, userID)
 	if err != nil {
 		SendTelegramMessage(tg, chatID, tr(lang, "trackers_load_failed"))
@@ -336,7 +337,7 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	var trackers []trackerListRow
 	for rows.Next() {
 		var t trackerListRow
-		rows.Scan(&t.id, &t.url, &t.title, &t.price, &t.currency, &t.stockStatus, &t.status, &t.interval, &t.trackingMode)
+		rows.Scan(&t.id, &t.url, &t.title, &t.price, &t.currency, &t.stockStatus, &t.status, &t.trackingMode)
 		trackers = append(trackers, t)
 	}
 
@@ -358,18 +359,76 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 		} else if t.price != nil {
 			card += fmt.Sprintf("\n💰 %.2f %s", *t.price, t.currency)
 		}
-		card += fmt.Sprintf("\n⏱ %s", formatInterval(lang, t.interval))
 		card += fmt.Sprintf("\n🔗 <a href=\"%s\">%s</a>", html.EscapeString(t.url), extractDomain(t.url))
 		card += fmt.Sprintf("\nID: <code>%s</code>", shortID)
 
 		kbd := [][]inlineButton{
 			{button(tr(lang, "button_delete"), "tracker:delete:"+shortID)},
 		}
+		if isAdmin {
+			kbd = append([][]inlineButton{{button(tr(lang, "button_check_now"), "tracker:check:"+shortID)}}, kbd...)
+		}
 		if i == len(trackers)-1 {
 			kbd = append(kbd, []inlineButton{button(tr(lang, "button_back"), "menu:back")})
 		}
 
 		_ = tg.SendMessageWithMarkup(chatID, card, makeInlineKeyboard(kbd...))
+	}
+}
+
+// handleSuccessfulTrackerHistory lists trackers the user explicitly stopped from a
+// successful price-change/back-in-stock notification. These rows are retained instead
+// of deleted, which preserves the final observed result without scheduling more checks.
+func handleSuccessfulTrackerHistory(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang string, log zerolog.Logger) {
+	rows, err := pool.Query(ctx, `
+		SELECT url, COALESCE(title, domain), current_price, currency,
+		       current_stock_status, tracking_mode, completed_at
+		FROM trackers
+		WHERE user_id = $1 AND status = 'completed'
+		ORDER BY completed_at DESC
+		LIMIT 50
+	`, userID)
+	if err != nil {
+		log.Error().Err(err).Str("user_id", userID).Msg("failed to load successful tracker history")
+		SendTelegramMessage(tg, chatID, tr(lang, "success_history_load_failed"))
+		return
+	}
+	defer rows.Close()
+
+	type historyRow struct {
+		url, title, currency, stockStatus, trackingMode string
+		price                                           *float64
+		completedAt                                     time.Time
+	}
+	var history []historyRow
+	for rows.Next() {
+		var item historyRow
+		if err := rows.Scan(&item.url, &item.title, &item.price, &item.currency, &item.stockStatus, &item.trackingMode, &item.completedAt); err != nil {
+			log.Warn().Err(err).Msg("failed to scan successful tracker")
+			continue
+		}
+		history = append(history, item)
+	}
+	if len(history) == 0 {
+		sendMainMenu(tg, chatID, lang, tr(lang, "success_history_empty"))
+		return
+	}
+
+	_ = tg.SendMessage(chatID, tr(lang, "success_history_title"))
+	for i, item := range history {
+		card := fmt.Sprintf("✅ <b>%s</b>", truncate(item.title, 60))
+		if item.trackingMode == "stock" {
+			card += "\n📦 " + tr(lang, "tracker_stock_available")
+		} else if item.price != nil {
+			card += fmt.Sprintf("\n💰 %.2f %s", *item.price, item.currency)
+		}
+		card += fmt.Sprintf("\n🔗 <a href=\"%s\">%s</a>", html.EscapeString(item.url), extractDomain(item.url))
+		card += "\n🗓 " + item.completedAt.Format("02.01.2006 15:04")
+		var markup json.RawMessage
+		if i == len(history)-1 {
+			markup = makeInlineKeyboard([]inlineButton{button(tr(lang, "button_back"), "menu:back")})
+		}
+		_ = tg.SendMessageWithMarkup(chatID, card, markup)
 	}
 }
 

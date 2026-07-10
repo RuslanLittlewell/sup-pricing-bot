@@ -21,6 +21,15 @@ func (e *GenericExtractor) Extract(htmlContent []byte, url string) (*ExtractionR
 	result := &ExtractionResult{
 		Candidates: []PriceCandidate{},
 	}
+	if IsAllegroURL(url) {
+		if allegro := extractAllegroOffer(htmlContent, url); allegro != nil {
+			return allegro, nil
+		}
+		// Never run broad DOM/regex price scans over an Allegro challenge or partial
+		// page: it contains short generated tokens such as "z1" and many unrelated
+		// monetary values. Returning no candidates lets the caller use search fallback.
+		return result, nil
+	}
 
 	doc, err := html.Parse(strings.NewReader(string(htmlContent)))
 	if err != nil {

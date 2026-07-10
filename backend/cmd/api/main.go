@@ -25,8 +25,6 @@ var botCommands = map[string][]telegram.BotCommand{
 		{Command: "start", Description: "Start the bot / choose language"},
 		{Command: "list", Description: "Show your trackers"},
 		{Command: "add", Description: "Add a tracker by link"},
-		{Command: "delete", Description: "Delete a tracker by ID"},
-		{Command: "check", Description: "Check a tracker now"},
 		{Command: "history", Description: "Show price history"},
 		{Command: "lang", Description: "Change language"},
 		{Command: "help", Description: "How to use the bot"},
@@ -35,8 +33,6 @@ var botCommands = map[string][]telegram.BotCommand{
 		{Command: "start", Description: "Запустить бота / выбрать язык"},
 		{Command: "list", Description: "Список трекеров"},
 		{Command: "add", Description: "Добавить трекер по ссылке"},
-		{Command: "delete", Description: "Удалить трекер по ID"},
-		{Command: "check", Description: "Проверить трекер сейчас"},
 		{Command: "history", Description: "История изменения цены"},
 		{Command: "lang", Description: "Сменить язык"},
 		{Command: "help", Description: "Как пользоваться ботом"},
@@ -45,8 +41,6 @@ var botCommands = map[string][]telegram.BotCommand{
 		{Command: "start", Description: "Uruchom bota / wybierz język"},
 		{Command: "list", Description: "Lista trackerów"},
 		{Command: "add", Description: "Dodaj tracker po linku"},
-		{Command: "delete", Description: "Usuń tracker po ID"},
-		{Command: "check", Description: "Sprawdź tracker teraz"},
 		{Command: "history", Description: "Historia zmian ceny"},
 		{Command: "lang", Description: "Zmień język"},
 		{Command: "help", Description: "Jak korzystać z bota"},
@@ -112,7 +106,8 @@ func main() {
 	r.Use(handler.Cors(cfg.CORSOrigin))
 	r.Use(handler.Timeout(30 * time.Second))
 
-	r.Get("/healthz", handler.Healthz)
+	r.Get("/livez", handler.Livez)
+	r.Get("/healthz", handler.Healthz(pool))
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(handler.RateLimit())
@@ -131,8 +126,10 @@ func main() {
 			r.Get("/users", handler.AdminUsers(pool, log))
 			r.Get("/users/{id}/trackers", handler.AdminUserTrackers(pool, log))
 			r.Get("/trackers", handler.AdminTrackers(pool, log))
+			r.Get("/status", handler.AdminStatus(pool, log))
 			r.Delete("/trackers/failed/{kind}/{id}", handler.AdminDeleteFailedTracker(pool, log))
 			r.Get("/proxies", handler.AdminProxies(pool, log))
+			r.Post("/proxies", handler.AdminAddProxies(pool, log))
 			r.Post("/proxies/{id}/check", handler.AdminCheckProxy(pool, log))
 			r.Post("/proxies/recheck", handler.AdminRecheckDeadProxies(pool, log))
 			r.Delete("/proxies/dead", handler.AdminDeleteDeadProxies(pool, log))

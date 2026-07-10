@@ -159,7 +159,7 @@ func applyTributeEvent(ctx context.Context, pool *pgxpool.Pool, eventName string
 				next_check_at = LEAST(t.next_check_at, now() + (p.check_interval_minutes * interval '1 minute')),
 				updated_at = now()
 			FROM plans p
-			WHERE p.code = $2 AND t.user_id = $1 AND t.status != 'deleted'
+			WHERE p.code = $2 AND t.user_id = $1 AND t.status = 'active'
 		`, userID, planCode)
 		return err
 

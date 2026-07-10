@@ -42,12 +42,27 @@ export interface FailedTracker {
   url: string
   error: string
   timestamp: string
+  consecutiveErrors: number
 }
 
 export interface TrackersResponse {
   fallbackTrackers: FallbackTracker[]
   failedTrackers: FailedTracker[]
   generatedAt: string
+}
+
+export interface ServiceStatus {
+  status: 'healthy' | 'degraded'
+  databaseStatus: string
+  workerStatus: string
+  workerLastSeenAt: string | null
+  workerAgeSeconds: number | null
+  activeTrackers: number
+  failingTrackers: number
+  dueTrackers: number
+  pendingNotifications: number
+  databaseConnections: number
+  checkedAt: string
 }
 
 export interface AdminProxy {
@@ -67,7 +82,7 @@ export interface AdminProxy {
 // The deployed API (backend/cmd/api) — the /api/admin/* routes are reachable directly
 // over HTTPS, no SSH tunnel needed. Override with VITE_API_URL for local testing against
 // a backend run on your own machine.
-const API_URL = import.meta.env.VITE_API_URL ?? 'https://pricebot-api.littlewell-app.work'
+const API_URL = import.meta.env.VITE_API_URL ?? 'https://pricebot-api.surpricebot.com'
 
 const CREDENTIALS_KEY = 'admin_credentials'
 
@@ -136,12 +151,46 @@ export function fetchTrackers(creds: Credentials): Promise<TrackersResponse> {
   return adminGet('/api/admin/trackers', creds)
 }
 
+export function fetchServiceStatus(creds: Credentials): Promise<ServiceStatus> {
+  return adminGet('/api/admin/status', creds)
+}
+
 export function fetchUserTrackers(creds: Credentials, userId: string): Promise<UserTracker[]> {
   return adminGet(`/api/admin/users/${encodeURIComponent(userId)}/trackers`, creds)
 }
 
 export function fetchProxies(creds: Credentials): Promise<AdminProxy[]> {
   return adminGet('/api/admin/proxies', creds)
+}
+
+export async function addProxies(
+  creds: Credentials,
+  text: string,
+): Promise<{ added: number; invalid: string[] }> {
+  const res = await fetch(`${API_URL}/api/admin/proxies`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+    },
+    body: JSON.stringify({ text }),
+  })
+  if (res.status === 401) {
+    throw new UnauthorizedError('Invalid username or password')
+  }
+  if (!res.ok) {
+    let msg = `POST /api/admin/proxies failed: ${res.status}`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) msg = body.error
+    } catch {
+      // response had no JSON error body; keep the generic status message
+    }
+    throw new Error(msg)
+  }
+  // The backend marshals a nil Go slice as null when every line parsed.
+  const body = (await res.json()) as { added: number; invalid: string[] | null }
+  return { added: body.added, invalid: body.invalid ?? [] }
 }
 
 export async function checkProxy(

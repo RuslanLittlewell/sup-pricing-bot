@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	neturl "net/url"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -269,23 +270,112 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	if err != nil || len(result.Candidates) == 0 {
 		result, err = extractor.NewGeneric().Extract(body, url)
 	}
-	if err != nil || len(result.Candidates) == 0 {
-		if fallback := extractor.NewSearchFallback(proxypool.NewStore(pool)); fallback != nil {
-			notifyStillSearching(tg, chatID, statusMsgID, lang)
-			result, err = fallback.Extract(body, url)
-		}
-	}
-	if err != nil || len(result.Candidates) == 0 {
-		if sendScanExhaustedApology(ctx, pool, tg, chatID, userID, lang, url, err, log) {
+	var direct *extractor.ExtractionResult
+	directErr := "screenshot price block not found"
+	if err == nil && len(result.Candidates) > 0 {
+		direct = result
+		if tryCreateTrackerFromCandidates(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, fetchMethod, direct, directErr, log) {
 			return true
 		}
-		return false
+		first := direct.Candidates[0]
+		directErr = fmt.Sprintf("%s; direct candidate inexact: %s %s (%s)", directErr, first.Price, first.Currency, extractor.RuleType(first.Rule))
 	}
 
-	return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, fetchMethod, result, "screenshot price block not found", log)
+	// Direct extraction either found nothing or nothing matching the entered price.
+	// Bot-challenge pages routinely yield one garbage candidate (a generated token
+	// like "z1" read as 1 PLN), so an inexact direct result must not block the
+	// search tiers — always try them before rejecting.
+	if fallback := extractor.NewSearchFallback(proxypool.NewStore(pool)); fallback != nil {
+		notifyStillSearching(tg, chatID, statusMsgID, lang)
+		fbResult, fbErr := fallback.Extract(body, url)
+		if fbErr == nil && len(fbResult.Candidates) > 0 {
+			return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, fetchMethod, fbResult, directErr, log)
+		}
+		if sendScanExhaustedApology(ctx, pool, tg, chatID, userID, lang, url, fbErr, log) {
+			return true
+		}
+		directErr += "; search fallback found no result"
+	}
+	if direct == nil {
+		return false
+	}
+	rejectTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, direct, directErr, log)
+	return true
 }
 
 func handleTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency, fetchMethod string, result *extractor.ExtractionResult, directErr string, log zerolog.Logger) bool {
+	if tryCreateTrackerFromCandidates(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, fetchMethod, result, directErr, log) {
+		return true
+	}
+	if tryAcceptCeneoMinPrice(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, fetchMethod, result, directErr, log) {
+		return true
+	}
+	rejectTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, result, directErr, log)
+	return true
+}
+
+// tryAcceptCeneoMinPrice relaxes the exact-price rule for ceneo.pl only. Ceneo is an
+// aggregator, so a search snippet for the product page carries its lowest offer
+// ("od 3899,00 zł"), which legitimately differs from whatever single-shop price the
+// user typed in. When a search-fallback candidate points at exactly the requested URL,
+// trust that minimum price: create the tracker with it and tell the user which price
+// was used. Everything non-Ceneo keeps the strict exact-match rule.
+func tryAcceptCeneoMinPrice(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency, fetchMethod string, result *extractor.ExtractionResult, directErr string, log zerolog.Logger) bool {
+	if !isCeneoURL(url) {
+		return false
+	}
+	for _, candidate := range result.Candidates {
+		if !isSearchFallbackRule(candidate.Rule) {
+			continue
+		}
+		if candidate.SourceURL == "" || !extractor.SameURL(candidate.SourceURL, url) {
+			continue
+		}
+		price, _, ok := parsePriceInput(candidate.Price)
+		if !ok {
+			continue
+		}
+		currency := candidate.Currency
+		if currency == "" {
+			currency = fallbackCurrency
+		}
+		recordExtractionFailure(ctx, pool, userID, url, fmt.Sprintf("%s; resolved by %s with ceneo minimum price %.2f %s (user entered %.2f)", directErr, extractor.RuleType(candidate.Rule), price, currency, expectedPrice), log)
+		log.Info().
+			Int64("telegram_id", chatID).
+			Str("url", url).
+			Float64("expected_price", expectedPrice).
+			Float64("accepted_price", price).
+			Str("currency", currency).
+			Str("method", extractor.RuleType(candidate.Rule)).
+			Msg("telegram ceneo minimum price accepted")
+		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "aggregator_min_price_created"), price, currency, expectedPrice))
+		createTrackerFromState(ctx, pool, tg, chatID, userID, lang, telegramState{
+			URL:          url,
+			Title:        result.Title,
+			InitialPrice: price,
+			Currency:     currency,
+			Rule:         candidate.Rule,
+			FetchMethod:  fetchMethod,
+		}, log)
+		return true
+	}
+	return false
+}
+
+func isCeneoURL(rawURL string) bool {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "ceneo.pl" || strings.HasSuffix(host, ".ceneo.pl")
+}
+
+// tryCreateTrackerFromCandidates creates the tracker if any candidate matches the
+// entered price exactly (and the requested URL, when the candidate carries a source).
+// It returns false without side effects when nothing matches, so the caller can try
+// further extraction tiers before rejecting.
+func tryCreateTrackerFromCandidates(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency, fetchMethod string, result *extractor.ExtractionResult, directErr string, log zerolog.Logger) bool {
 	// Some extractors return multiple readings of the same underlying value (e.g.
 	// a raw JSON price field read both literally and as minor units) since we
 	// can't tell upfront which one is correct — so every candidate needs to be
@@ -317,7 +407,12 @@ func handleTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *teleg
 			return true
 		}
 	}
+	return false
+}
 
+// rejectTextPriceCandidate records why no candidate was exact enough and tells the
+// user the site was noted as protected, clearing the dialog state.
+func rejectTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency string, result *extractor.ExtractionResult, directErr string, log zerolog.Logger) {
 	candidate := result.Candidates[0]
 	price, _, _ := parsePriceInput(candidate.Price)
 	currency := candidate.Currency
@@ -338,12 +433,11 @@ func handleTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *teleg
 
 	SendTelegramMessage(tg, chatID, tr(lang, "protected_site_noted"))
 	clearTelegramState(ctx, pool, chatID)
-	return true
 }
 
 func isSearchFallbackRule(rule json.RawMessage) bool {
 	switch extractor.RuleType(rule) {
-	case "openserp_search_result", "openserp_extract", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet", "gemini_url_context":
+	case "openserp_search_result", "openserp_extract", "searxng_exact_offer", "serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet", "gemini_url_context":
 		return true
 	default:
 		return false

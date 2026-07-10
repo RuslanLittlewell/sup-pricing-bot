@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://pricebot.littlewell-app.work/sitemap-index.xml
+Sitemap: https://surpricebot.com/sitemap-index.xml

@@ -65,7 +65,8 @@ func makeReplyKeyboard(rows ...[]replyButton) json.RawMessage {
 func mainMenuReplyKeyboard(lang string) json.RawMessage {
 	return makeReplyKeyboard(
 		[]replyButton{replyBtn(tr(lang, "button_new_tracker")), replyBtn(tr(lang, "button_trackers"))},
-		[]replyButton{replyBtn(tr(lang, "button_plans")), replyBtn(tr(lang, "button_instruction"))},
+		[]replyButton{replyBtn(tr(lang, "button_success_history")), replyBtn(tr(lang, "button_plans"))},
+		[]replyButton{replyBtn(tr(lang, "button_instruction"))},
 	)
 }
 
@@ -100,16 +101,19 @@ func sendPlansMenu(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client,
 	trialUsed := hasUsedTrial(ctx, pool, userID)
 
 	plans := []struct {
-		code, nameKey, taglineKey, trackersKey, intervalKey string
+		code, nameKey, taglineKey, trackersKey, frequencyKey string
 	}{
-		{"free", "plan_free_name", "plan_free_tagline", "plan_free_trackers", "plan_free_interval"},
-		{"trial", "plan_trial_name", "plan_trial_tagline", "plan_trial_trackers", "plan_trial_interval"},
-		{"basic", "plan_basic_name", "plan_basic_tagline", "plan_basic_trackers", "plan_basic_interval"},
-		{"pro", "plan_pro_name", "plan_pro_tagline", "plan_pro_trackers", "plan_pro_interval"},
+		{"free", "plan_free_name", "plan_free_tagline", "plan_free_trackers", ""},
+		{"trial", "plan_trial_name", "plan_trial_tagline", "plan_trial_trackers", "plan_basic_frequency"},
+		{"basic", "plan_basic_name", "plan_basic_tagline", "plan_basic_trackers", "plan_basic_frequency"},
+		{"pro", "plan_pro_name", "plan_pro_tagline", "plan_pro_trackers", "plan_pro_frequency"},
 	}
 	for i, p := range plans {
-		text := fmt.Sprintf("💳 <b>%s</b>\n<i>%s</i>\n\n📦 %s\n⏱ %s",
-			tr(lang, p.nameKey), tr(lang, p.taglineKey), tr(lang, p.trackersKey), tr(lang, p.intervalKey))
+		text := fmt.Sprintf("💳 <b>%s</b>\n<i>%s</i>\n\n📦 %s",
+			tr(lang, p.nameKey), tr(lang, p.taglineKey), tr(lang, p.trackersKey))
+		if p.frequencyKey != "" {
+			text += "\n⚡ " + tr(lang, p.frequencyKey)
+		}
 
 		var rows [][]inlineButton
 		switch {
