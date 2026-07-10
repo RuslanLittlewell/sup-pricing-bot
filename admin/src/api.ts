@@ -67,7 +67,7 @@ export interface AdminProxy {
 // The deployed API (backend/cmd/api) — the /api/admin/* routes are reachable directly
 // over HTTPS, no SSH tunnel needed. Override with VITE_API_URL for local testing against
 // a backend run on your own machine.
-const API_URL = import.meta.env.VITE_API_URL ?? 'https://pricebot-api.littlewell-app.work'
+const API_URL = import.meta.env.VITE_API_URL ?? 'https://pricebot-api.surpricebot.com'
 
 const CREDENTIALS_KEY = 'admin_credentials'
 
@@ -142,6 +142,34 @@ export function fetchUserTrackers(creds: Credentials, userId: string): Promise<U
 
 export function fetchProxies(creds: Credentials): Promise<AdminProxy[]> {
   return adminGet('/api/admin/proxies', creds)
+}
+
+export async function addProxies(
+  creds: Credentials,
+  text: string,
+): Promise<{ added: number; invalid: string[] }> {
+  const res = await fetch(`${API_URL}/api/admin/proxies`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+    },
+    body: JSON.stringify({ text }),
+  })
+  if (res.status === 401) {
+    throw new UnauthorizedError('Invalid username or password')
+  }
+  if (!res.ok) {
+    let msg = `POST /api/admin/proxies failed: ${res.status}`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) msg = body.error
+    } catch {
+      // response had no JSON error body; keep the generic status message
+    }
+    throw new Error(msg)
+  }
+  return res.json()
 }
 
 export async function checkProxy(

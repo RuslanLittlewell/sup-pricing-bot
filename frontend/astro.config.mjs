@@ -5,7 +5,7 @@ import react from '@astrojs/react';
 import sitemap from '@astrojs/sitemap';
 
 export default defineConfig({
-  site: 'https://pricebot.littlewell-app.work',
+  site: 'https://surpricebot.com',
   adapter: node({
     mode: 'standalone'
   }),

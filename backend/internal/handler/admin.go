@@ -329,6 +329,95 @@ func AdminProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
 	}
 }
 
+// AdminAddProxies bulk-adds authenticated proxies pasted as text (one per line, in the
+// provider's "host:port:user:pass" list format — "host:port" without credentials is also
+// accepted). It's the admin-facing wiring for proxypool.Store.AddManual, which otherwise
+// had no route: paste a provider's IP list into the dashboard modal and submit. Duplicate
+// addresses within the paste are de-duplicated; unparseable lines are reported back rather
+// than silently dropped. Newly added proxies start 'unknown' and only enter rotation once
+// the aliveness sweep (hourly, or the "Recheck" button) marks them 'alive'.
+func AdminAddProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
+	store := proxypool.NewStore(pool)
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+
+		var (
+			entries []proxypool.ManualEntry
+			invalid []string
+			seen    = map[string]bool{}
+		)
+		for _, line := range strings.Split(strings.ReplaceAll(req.Text, "\r\n", "\n"), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			entry, ok := parseProxyLine(trimmed)
+			if !ok {
+				invalid = append(invalid, trimmed)
+				continue
+			}
+			if seen[entry.Address] {
+				continue
+			}
+			seen[entry.Address] = true
+			entries = append(entries, entry)
+		}
+
+		if len(entries) == 0 {
+			http.Error(w, `{"error":"no valid proxies found; expected host:port:user:pass per line"}`, http.StatusBadRequest)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+
+		if err := store.AddManual(ctx, entries); err != nil {
+			log.Error().Err(err).Msg("failed to add manual proxies")
+			http.Error(w, `{"error":"failed to add proxies"}`, http.StatusInternalServerError)
+			return
+		}
+
+		log.Info().Int("added", len(entries)).Int("invalid", len(invalid)).Msg("admin added manual proxies")
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"added":   len(entries),
+			"invalid": invalid,
+		}); err != nil {
+			log.Error().Err(err).Msg("failed to encode admin add proxies response")
+		}
+	}
+}
+
+// parseProxyLine parses one pasted proxy line. Accepts "host:port:user:pass" (the paid
+// provider's list format) and bare "host:port" (unauthenticated). Returns ok=false for
+// anything else so the caller can surface it as an invalid line.
+func parseProxyLine(line string) (proxypool.ManualEntry, bool) {
+	parts := strings.Split(line, ":")
+	switch len(parts) {
+	case 2:
+		host, port := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		if host == "" || port == "" {
+			return proxypool.ManualEntry{}, false
+		}
+		return proxypool.ManualEntry{Address: host + ":" + port}, true
+	case 4:
+		host, port := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		user, pass := strings.TrimSpace(parts[2]), strings.TrimSpace(parts[3])
+		if host == "" || port == "" || user == "" || pass == "" {
+			return proxypool.ManualEntry{}, false
+		}
+		return proxypool.ManualEntry{Address: host + ":" + port, Username: user, Password: pass}, true
+	default:
+		return proxypool.ManualEntry{}, false
+	}
+}
+
 // AdminCheckProxy re-checks a single proxy's aliveness immediately (see
 // proxypool.Store.CheckOne) — the admin dashboard's per-proxy "ping" action, for when you
 // don't want to wait for the hourly sweep to find out whether one specific proxy is up.

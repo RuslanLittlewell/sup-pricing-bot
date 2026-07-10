@@ -8,8 +8,8 @@ DEPLOY_DIR="${DEPLOY_DIR:-/opt/price-checker-bot}"
 # Use real DNS names that point to VPS_HOST. Examples:
 #   APP_DOMAIN=pricebot.example.com
 #   API_DOMAIN=api.pricebot.example.com
-APP_DOMAIN="${APP_DOMAIN:-pricebot.littlewell-app.work}"
-API_DOMAIN="${API_DOMAIN:-pricebot-api.littlewell-app.work}"
+APP_DOMAIN="${APP_DOMAIN:-surpricebot.com}"
+API_DOMAIN="${API_DOMAIN:-pricebot-api.surpricebot.com}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@${APP_DOMAIN}}"
 ENABLE_CERTBOT="${ENABLE_CERTBOT:-0}"
 FRONTEND_HOST_PORT="${FRONTEND_HOST_PORT:-13000}"
