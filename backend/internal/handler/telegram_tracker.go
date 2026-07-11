@@ -106,7 +106,11 @@ func createTrackerFromState(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
 		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
 	)
-	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "tracker_created"), title, state.URL, formatMoney(state.InitialPrice), trackerID[:8]), markup)
+	message := fmt.Sprintf(tr(lang, "tracker_created"), title, state.URL, formatMoney(state.InitialPrice), trackerID[:8])
+	if shops.IsWildberriesURL(state.URL) {
+		message += "\n\n" + tr(lang, "wildberries_account_discount_note")
+	}
+	_ = tg.SendMessageWithMarkup(chatID, message, markup)
 }
 
 // syncTrackerIntervalsToPlan re-points all of a user's active trackers to a plan's scan
@@ -131,7 +135,21 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 	}
 	SendTelegramMessage(tg, chatID, tr(lang, "stock_search_started"))
 
-	body, fetchMethod, err := fetcher.Fetch(url)
+	fetchURL := url
+	var extractionRule []byte
+	stockMethod := "keyword_scan"
+	if shops.IsWildberriesURL(url) {
+		apiURL, apiErr := shops.WildberriesAPIURL(url)
+		if apiErr != nil {
+			SendTelegramMessage(tg, chatID, tr(lang, "price_not_found"))
+			clearTelegramState(ctx, pool, chatID)
+			return
+		}
+		fetchURL = apiURL
+		extractionRule, _ = json.Marshal(map[string]string{"type": "wildberries_stock", "article": shops.WildberriesArticle(url)})
+		stockMethod = "wildberries_api"
+	}
+	body, fetchMethod, err := fetcher.Fetch(fetchURL)
 	if err != nil {
 		log.Error().Err(err).Str("url", url).Msg("failed to fetch page for stock tracker")
 		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "page_load_failed_detail"), err.Error()))
@@ -140,11 +158,25 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 	}
 
 	stockStatus := extractor.DetectStockStatusFromText(body)
+	title := ""
+	if shops.IsWildberriesURL(url) {
+		product, parseErr := shops.ParseWildberriesProduct(body, shops.WildberriesArticle(url))
+		if parseErr != nil {
+			SendTelegramMessage(tg, chatID, tr(lang, "price_not_found"))
+			clearTelegramState(ctx, pool, chatID)
+			return
+		}
+		title = product.Title
+		if product.InStock {
+			stockStatus = "in_stock"
+		} else {
+			stockStatus = "out_of_stock"
+		}
+	}
 
 	generic := extractor.NewGeneric()
 	result, _ := generic.Extract(body, url)
-	title := ""
-	if result != nil {
+	if title == "" && result != nil {
 		title = result.Title
 	}
 	if title == "" {
@@ -153,10 +185,10 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 
 	var trackerID string
 	err = pool.QueryRow(ctx, `
-		INSERT INTO trackers (user_id, url, normalized_url, domain, title, initial_price, current_price, currency, current_stock_status, tracking_mode, status, next_check_at)
-		VALUES ($1, $2, $2, $3, $4, 0, NULL, 'PLN', $5, 'stock', 'active', now() + interval '3 hours')
+		INSERT INTO trackers (user_id, url, normalized_url, domain, title, initial_price, current_price, currency, current_stock_status, tracking_mode, extraction_rule, status, next_check_at)
+		VALUES ($1, $2, $2, $3, $4, 0, NULL, '', $5, 'stock', $6, 'active', now() + interval '3 hours')
 		RETURNING id
-	`, userID, url, extractDomain(url), title, stockStatus).Scan(&trackerID)
+	`, userID, url, extractDomain(url), title, stockStatus, extractionRule).Scan(&trackerID)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to create stock tracker")
 		SendTelegramMessage(tg, chatID, tr(lang, "tracker_create_failed"))
@@ -174,15 +206,19 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 
 	pool.Exec(ctx, `
 		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method, fetch_method)
-		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success', 'keyword_scan', $3)
-	`, trackerID, stockStatus, fetchMethod)
+		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success', $3, $4)
+	`, trackerID, stockStatus, stockMethod, fetchMethod)
 
 	clearTelegramState(ctx, pool, chatID)
 	markup := makeInlineKeyboard(
 		[]inlineButton{button(tr(lang, "button_trackers"), "menu:list")},
 		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
 	)
-	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "stock_tracker_created"), title, url, stockStatus, trackerID[:8]), markup)
+	message := fmt.Sprintf(tr(lang, "stock_tracker_created"), title, url, stockStatus, trackerID[:8])
+	if shops.IsWildberriesURL(url) {
+		message += "\n\n" + tr(lang, "wildberries_account_discount_note")
+	}
+	_ = tg.SendMessageWithMarkup(chatID, message, markup)
 }
 
 // startStockTracking is the entry point for the "track availability" flow. Most sites
@@ -357,7 +393,7 @@ func handleListTrackers(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 				card += fmt.Sprintf("\n⏳ %s", tr(lang, "tracker_stock_waiting"))
 			}
 		} else if t.price != nil {
-			card += fmt.Sprintf("\n💰 %.2f %s", *t.price, t.currency)
+			card += fmt.Sprintf("\n💰 %.2f", *t.price)
 		}
 		card += fmt.Sprintf("\n🔗 <a href=\"%s\">%s</a>", html.EscapeString(t.url), extractDomain(t.url))
 		card += fmt.Sprintf("\nID: <code>%s</code>", shortID)
@@ -420,7 +456,7 @@ func handleSuccessfulTrackerHistory(ctx context.Context, pool *pgxpool.Pool, tg 
 		if item.trackingMode == "stock" {
 			card += "\n📦 " + tr(lang, "tracker_stock_available")
 		} else if item.price != nil {
-			card += fmt.Sprintf("\n💰 %.2f %s", *item.price, item.currency)
+			card += fmt.Sprintf("\n💰 %.2f", *item.price)
 		}
 		card += fmt.Sprintf("\n🔗 <a href=\"%s\">%s</a>", html.EscapeString(item.url), extractDomain(item.url))
 		card += "\n🗓 " + item.completedAt.Format("02.01.2006 15:04")

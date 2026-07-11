@@ -149,9 +149,9 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 // saved pairing no longer works (the proxy could have gone dead, or the site could have
 // started blocking it since).
 func (f *PageFetcher) fetchDirect(url string) ([]byte, proxypool.FetchFingerprint, error) {
-	if f.proxies != nil {
+	if f.proxies != nil && !proxypool.RequiresRussianProxy(url) {
 		if saved, ok := f.proxies.GetFingerprint(context.Background(), url); ok {
-			if body, fp, err := f.httpFetch(url, &saved); err == nil && !isBotChallenge(body) {
+			if body, fp, err := f.httpFetch(url, &saved, "saved"); err == nil && !isBotChallenge(body) {
 				return body, fp, nil
 			}
 		}
@@ -188,7 +188,14 @@ func (f *PageFetcher) httpFetchWithRetry(url string) ([]byte, proxypool.FetchFin
 	const maxAttempts = 3
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		body, fp, err := f.httpFetch(url, nil)
+		tier := "direct"
+		if attempt == 2 {
+			tier = "non_residential"
+		}
+		if attempt == 3 {
+			tier = "residential"
+		}
+		body, fp, err := f.httpFetch(url, nil, tier)
 		if err == nil {
 			return body, fp, nil
 		}
@@ -207,7 +214,7 @@ func (f *PageFetcher) httpFetchWithRetry(url string) ([]byte, proxypool.FetchFin
 // profile only if that exact User-Agent is no longer in the pool, e.g. after a deploy
 // trims it); nil forced means pick fresh — a random profile, and a random alive proxy
 // from the pool if one is wired up and available.
-func (f *PageFetcher) pickForAttempt(forced *proxypool.FetchFingerprint) (useragent.Profile, proxypool.PickedProxy) {
+func (f *PageFetcher) pickForAttempt(targetURL, tier string, forced *proxypool.FetchFingerprint) (useragent.Profile, proxypool.PickedProxy) {
 	if forced != nil {
 		profile, ok := useragent.ByUserAgent(forced.UserAgent)
 		if !ok {
@@ -218,10 +225,17 @@ func (f *PageFetcher) pickForAttempt(forced *proxypool.FetchFingerprint) (userag
 
 	profile := useragent.Random()
 	var proxy proxypool.PickedProxy
-	if f.proxies != nil {
+	if f.proxies != nil && tier != "direct" {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		if picked, ok := f.proxies.Pick(ctx); ok {
+		var picked proxypool.PickedProxy
+		var ok bool
+		if tier == "residential" {
+			picked, ok = f.proxies.PickResidentialForURL(ctx, targetURL)
+		} else {
+			picked, ok = f.proxies.PickNonResidential(ctx)
+		}
+		if ok {
 			proxy = picked
 		}
 	}
@@ -247,13 +261,13 @@ func (f *PageFetcher) clientFor(proxy proxypool.PickedProxy) *http.Client {
 	}
 }
 
-func (f *PageFetcher) httpFetch(url string, forced *proxypool.FetchFingerprint) ([]byte, proxypool.FetchFingerprint, error) {
+func (f *PageFetcher) httpFetch(url string, forced *proxypool.FetchFingerprint, tier string) ([]byte, proxypool.FetchFingerprint, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, proxypool.FetchFingerprint{}, fmt.Errorf("create request: %w", err)
 	}
 
-	profile, proxy := f.pickForAttempt(forced)
+	profile, proxy := f.pickForAttempt(url, tier, forced)
 	req.Header.Set("User-Agent", profile.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7")
@@ -306,6 +320,10 @@ func isBotChallenge(body []byte) bool {
 		// DataDome challenge/block — confirmed against allegro.pl.
 		`enable JS and disable any ad blocker`,
 		`Zostałeś zablokowany`,
+		// Lamoda's SPSN challenge is a generated JavaScript page rather than product
+		// HTML. Without this marker it reaches the price parsers as a successful 200.
+		`get_cookie_spsn()`,
+		`get_cookie_spid()`,
 	}
 	// Akamai's edge-deny page is only ~414 bytes. A distinctive string match is
 	// unambiguous regardless of body length, so check indicators unconditionally rather

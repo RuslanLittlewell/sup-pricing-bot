@@ -335,6 +335,9 @@ type adminProxy struct {
 	CountryCode   string  `json:"countryCode"`
 	Status        string  `json:"status"`
 	Source        string  `json:"source"`
+	NetworkType   string  `json:"networkType"`
+	Provider      string  `json:"provider"`
+	ASN           string  `json:"asn"`
 	HasAuth       bool    `json:"hasAuth"`
 	UseCount      int     `json:"useCount"`
 	LastCheckedAt *string `json:"lastCheckedAt"`
@@ -368,6 +371,9 @@ func AdminProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
 				CountryCode: p.CountryCode,
 				Status:      p.Status,
 				Source:      p.Source,
+				NetworkType: p.NetworkType,
+				Provider:    p.Provider,
+				ASN:         p.ASN,
 				HasAuth:     p.HasAuth,
 				UseCount:    p.UseCount,
 				CreatedAt:   p.CreatedAt.Format(time.RFC3339),
@@ -401,7 +407,11 @@ func AdminAddProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
 	store := proxypool.NewStore(pool)
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Text string `json:"text"`
+			Text        string `json:"text"`
+			NetworkType string `json:"networkType"`
+			Provider    string `json:"provider"`
+			ASN         string `json:"asn"`
+			CountryCode string `json:"countryCode"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -429,6 +439,10 @@ func AdminAddProxies(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
 				continue
 			}
 			seen[entry.Address] = true
+			entry.NetworkType = req.NetworkType
+			entry.Provider = strings.TrimSpace(req.Provider)
+			entry.ASN = strings.TrimSpace(req.ASN)
+			entry.CountryCode = strings.ToUpper(strings.TrimSpace(req.CountryCode))
 			entries = append(entries, entry)
 		}
 

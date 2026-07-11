@@ -146,6 +146,11 @@ var Migrations = []Migration{
 		Description: "record service heartbeats for readiness monitoring",
 		SQL:         migrationV26,
 	},
+	{
+		Version:     27,
+		Description: "add proxy network classification metadata",
+		SQL:         migrationV27,
+	},
 }
 
 const migrationV1 = `
@@ -645,6 +650,16 @@ CREATE TABLE IF NOT EXISTS service_heartbeats (
     last_seen_at TIMESTAMPTZ NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
 );
+`
+
+const migrationV27 = `
+ALTER TABLE proxies ADD COLUMN IF NOT EXISTS network_type TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE proxies ADD COLUMN IF NOT EXISTS provider TEXT;
+ALTER TABLE proxies ADD COLUMN IF NOT EXISTS asn TEXT;
+ALTER TABLE proxies DROP CONSTRAINT IF EXISTS proxies_network_type_check;
+ALTER TABLE proxies ADD CONSTRAINT proxies_network_type_check
+    CHECK (network_type IN ('residential', 'mobile', 'datacenter', 'unknown'));
+CREATE INDEX IF NOT EXISTS idx_proxies_network_type ON proxies(network_type);
 `
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Logger) error {

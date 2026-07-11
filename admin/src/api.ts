@@ -72,11 +72,25 @@ export interface AdminProxy {
   countryCode: string
   status: string
   source: string
+  networkType: 'residential' | 'mobile' | 'datacenter' | 'unknown'
+  provider: string
+  asn: string
   hasAuth: boolean
   useCount: number
   lastCheckedAt: string | null
   lastUsedAt: string | null
   createdAt: string
+}
+
+export interface PlaygroundResult {
+  tool: string
+  url: string
+  durationMs: number
+  fetchMethod?: string
+  bodyBytes?: number
+  stockStatus?: string
+  result?: unknown
+  error?: string
 }
 
 // The deployed API (backend/cmd/api) — the /api/admin/* routes are reachable directly
@@ -163,9 +177,24 @@ export function fetchProxies(creds: Credentials): Promise<AdminProxy[]> {
   return adminGet('/api/admin/proxies', creds)
 }
 
+export async function runPlaygroundTool(creds: Credentials, tool: string, url: string): Promise<PlaygroundResult> {
+  const res = await fetch(`${API_URL}/api/admin/playground/run`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+    },
+    body: JSON.stringify({ tool, url }),
+  })
+  if (res.status === 401) throw new UnauthorizedError('Invalid username or password')
+  if (!res.ok) throw new Error(`Playground request failed: ${res.status}`)
+  return res.json()
+}
+
 export async function addProxies(
   creds: Credentials,
   text: string,
+  metadata: { networkType: AdminProxy['networkType']; provider: string; asn: string; countryCode: string },
 ): Promise<{ added: number; invalid: string[] }> {
   const res = await fetch(`${API_URL}/api/admin/proxies`, {
     method: 'POST',
@@ -173,7 +202,7 @@ export async function addProxies(
       'Content-Type': 'application/json',
       Authorization: 'Basic ' + btoa(`${creds.username}:${creds.password}`),
     },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, ...metadata }),
   })
   if (res.status === 401) {
     throw new UnauthorizedError('Invalid username or password')

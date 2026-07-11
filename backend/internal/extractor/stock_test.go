@@ -72,3 +72,15 @@ func TestDetectStockStatusZaraSizeNoLongerListed(t *testing.T) {
 		t.Fatal("expected an error when the tracked size is no longer listed")
 	}
 }
+
+func TestDetectStockStatusWildberriesAPI(t *testing.T) {
+	rule := []byte(`{"type":"wildberries_stock","article":"264041181"}`)
+	body := []byte(`{"products":[{"id":264041181,"name":"Product","sizes":[{"stocks":[{"qty":2}],"price":{"product":10000,"logistics":500}}]}]}`)
+	status, method, err := DetectStockStatus(rule, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "in_stock" || method != "wildberries_api" {
+		t.Fatalf("got %s/%s", status, method)
+	}
+}

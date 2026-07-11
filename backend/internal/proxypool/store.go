@@ -8,7 +8,9 @@ package proxypool
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +41,9 @@ type Proxy struct {
 	CountryCode   string
 	Status        string
 	Source        string
+	NetworkType   string
+	Provider      string
+	ASN           string
 	HasAuth       bool
 	UseCount      int
 	LastCheckedAt *time.Time
@@ -53,6 +58,9 @@ type ManualEntry struct {
 	Username    string
 	Password    string
 	CountryCode string
+	NetworkType string
+	Provider    string
+	ASN         string
 }
 
 // PickedProxy is what Pick hands back: enough to actually dial through the proxy.
@@ -102,19 +110,31 @@ func (s *Store) Refresh(ctx context.Context, log zerolog.Logger) {
 func (s *Store) AddManual(ctx context.Context, entries []ManualEntry) error {
 	for _, e := range entries {
 		if _, err := s.pool.Exec(ctx, `
-			INSERT INTO proxies (address, protocol, country_code, username, password, source)
-			VALUES ($1, 'socks5', NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), 'manual')
+			INSERT INTO proxies (address, protocol, country_code, username, password, source, network_type, provider, asn)
+			VALUES ($1, 'socks5', NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), 'manual', $5, NULLIF($6, ''), NULLIF($7, ''))
 			ON CONFLICT (address) DO UPDATE SET
 				country_code = COALESCE(NULLIF($2, ''), proxies.country_code),
 				username = NULLIF($3, ''),
 				password = NULLIF($4, ''),
+				network_type = $5,
+				provider = COALESCE(NULLIF($6, ''), proxies.provider),
+				asn = COALESCE(NULLIF($7, ''), proxies.asn),
 				source = 'manual',
 				updated_at = now()
-		`, e.Address, e.CountryCode, e.Username, e.Password); err != nil {
+		`, e.Address, e.CountryCode, e.Username, e.Password, normalizeNetworkType(e.NetworkType), e.Provider, e.ASN); err != nil {
 			return fmt.Errorf("add manual proxy %s: %w", e.Address, err)
 		}
 	}
 	return nil
+}
+
+func normalizeNetworkType(value string) string {
+	switch value {
+	case "residential", "mobile", "datacenter":
+		return value
+	default:
+		return "unknown"
+	}
 }
 
 // DiscoveredEntry is a free/public proxy found by an automatic source (see FetchGeonode) —
@@ -311,14 +331,96 @@ func (s *Store) recheckProxies(ctx context.Context, query string, args ...any) (
 // (use_count, last_used_at) so the admin dashboard can show which proxies are actually
 // carrying traffic. Returns ok=false if the pool has no alive proxy right now.
 func (s *Store) Pick(ctx context.Context) (picked PickedProxy, ok bool) {
+	return s.pickByCountry(ctx, "")
+}
+
+// PickForURL applies locale routing before falling back to the whole pool. Russian and
+// Belarusian storefronts are requested through RU exits because they commonly localize
+// catalogues and availability by visitor country.
+func (s *Store) PickForURL(ctx context.Context, rawURL string) (picked PickedProxy, ok bool) {
+	if RequiresRussianProxy(rawURL) {
+		if picked, ok := s.pickByCountry(ctx, "RU"); ok {
+			return picked, true
+		}
+	}
+	return s.pickByCountry(ctx, "")
+}
+
+// PickNonResidential returns a free/datacenter/unknown proxy for the cheap retry tier.
+func (s *Store) PickNonResidential(ctx context.Context) (PickedProxy, bool) {
+	return s.pickByTier(ctx, "non_residential", "")
+}
+
+// PickResidentialForURL is the expensive anti-bot tier. DataImpulse country targeting
+// and a stable per-domain session are encoded in the username at request time, so one
+// stored gateway can serve every market without duplicate database rows.
+func (s *Store) PickResidentialForURL(ctx context.Context, rawURL string) (PickedProxy, bool) {
+	return s.pickByTier(ctx, "residential", rawURL)
+}
+
+func (s *Store) pickByTier(ctx context.Context, tier, rawURL string) (picked PickedProxy, ok bool) {
+	var username, password, provider *string
+	err := s.pool.QueryRow(ctx, `
+		UPDATE proxies SET use_count = use_count + 1, last_used_at = now(), updated_at = now()
+		WHERE id = (
+			SELECT id FROM proxies
+			WHERE status = 'alive'
+			  AND (($1 = 'residential' AND network_type = 'residential')
+			    OR ($1 = 'non_residential' AND network_type != 'residential'))
+			ORDER BY random() LIMIT 1
+		)
+		RETURNING address, username, password, provider
+	`, tier).Scan(&picked.Address, &username, &password, &provider)
+	if err != nil {
+		return PickedProxy{}, false
+	}
+	if username != nil {
+		picked.Username = *username
+	}
+	if password != nil {
+		picked.Password = *password
+	}
+	if provider != nil && strings.EqualFold(*provider, "DataImpulse") && picked.Username != "" {
+		picked.Username = dataImpulseUsername(picked.Username, rawURL)
+	}
+	return picked, true
+}
+
+func dataImpulseUsername(base, rawURL string) string {
+	parsed, _ := url.Parse(rawURL)
+	host := strings.ToLower(parsed.Hostname())
+	country := ""
+	switch {
+	case strings.HasSuffix(host, ".by"):
+		country = "by"
+	case strings.HasSuffix(host, ".ru"):
+		country = "ru"
+	case strings.HasSuffix(host, ".pl"):
+		country = "pl"
+	}
+	if strings.Contains(base, "__") {
+		base = strings.SplitN(base, "__", 2)[0]
+	}
+	params := ""
+	if country != "" {
+		params = "__cr." + country
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(host))
+	return fmt.Sprintf("%s%s;sessid.%x", base, params, h.Sum32())
+}
+
+func (s *Store) pickByCountry(ctx context.Context, country string) (picked PickedProxy, ok bool) {
 	var username, password *string
 	err := s.pool.QueryRow(ctx, `
 		UPDATE proxies SET use_count = use_count + 1, last_used_at = now(), updated_at = now()
 		WHERE id = (
-			SELECT id FROM proxies WHERE status = 'alive' ORDER BY random() LIMIT 1
+			SELECT id FROM proxies
+			WHERE status = 'alive' AND ($1 = '' OR country_code = $1)
+			ORDER BY random() LIMIT 1
 		)
 		RETURNING address, username, password
-	`).Scan(&picked.Address, &username, &password)
+	`, country).Scan(&picked.Address, &username, &password)
 	if err != nil {
 		return PickedProxy{}, false
 	}
@@ -329,6 +431,17 @@ func (s *Store) Pick(ctx context.Context) (picked PickedProxy, ok bool) {
 		picked.Password = *password
 	}
 	return picked, true
+}
+
+// RequiresRussianProxy reports whether a hostname belongs to the Russian or Belarusian
+// country-code namespace. URL parsing avoids false positives such as example.ru.com.
+func RequiresRussianProxy(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	return strings.HasSuffix(host, ".ru") || strings.HasSuffix(host, ".by") || host == "ru" || host == "by"
 }
 
 // FetchFingerprint is a (User-Agent, proxy) pairing that previously produced a real page
@@ -415,6 +528,7 @@ func (s *Store) DeleteDead(ctx context.Context) (int64, error) {
 func (s *Store) List(ctx context.Context) ([]Proxy, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, address, protocol, COALESCE(country_code, ''), status, source,
+		       network_type, COALESCE(provider, ''), COALESCE(asn, ''),
 		       (username IS NOT NULL AND username != ''), use_count,
 		       last_checked_at, last_used_at, created_at
 		FROM proxies
@@ -429,6 +543,7 @@ func (s *Store) List(ctx context.Context) ([]Proxy, error) {
 	for rows.Next() {
 		var p Proxy
 		if err := rows.Scan(&p.ID, &p.Address, &p.Protocol, &p.CountryCode, &p.Status, &p.Source,
+			&p.NetworkType, &p.Provider, &p.ASN,
 			&p.HasAuth, &p.UseCount, &p.LastCheckedAt, &p.LastUsedAt, &p.CreatedAt); err != nil {
 			return nil, err
 		}

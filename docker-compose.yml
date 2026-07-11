@@ -28,10 +28,13 @@ services:
       DATABASE_URL: postgres://postgres:postgres@db:5432/price_tracker?sslmode=disable
       CORS_ORIGIN: http://localhost:3000
       API_URL: http://localhost:3000
+      SCRAPER_PROFILE_DIR: /var/lib/pricebot/browser-profiles
+      RENDERER_PROFILE_NAMESPACE: backend
     ports:
       - "8080:8080"
     volumes:
       - ./backend:/app
+      - browser_profiles:/var/lib/pricebot/browser-profiles
     depends_on:
       db:
         condition: service_healthy
@@ -46,8 +49,11 @@ services:
     environment:
       ENV: development
       DATABASE_URL: postgres://postgres:postgres@db:5432/price_tracker?sslmode=disable
+      SCRAPER_PROFILE_DIR: /var/lib/pricebot/browser-profiles
+      RENDERER_PROFILE_NAMESPACE: worker
     volumes:
       - ./backend:/app
+      - browser_profiles:/var/lib/pricebot/browser-profiles
     depends_on:
       db:
         condition: service_healthy
@@ -74,3 +80,4 @@ services:
 
 volumes:
   pgdata:
+  browser_profiles:

@@ -15,7 +15,9 @@ import (
 
 	"github.com/littlewell/price-tracker/internal/config"
 	"github.com/littlewell/price-tracker/internal/db"
+	"github.com/littlewell/price-tracker/internal/extractor"
 	"github.com/littlewell/price-tracker/internal/handler"
+	"github.com/littlewell/price-tracker/internal/proxypool"
 	"github.com/littlewell/price-tracker/internal/renderer"
 	"github.com/littlewell/price-tracker/internal/telegram"
 )
@@ -97,6 +99,7 @@ func main() {
 	if err := db.RunMigrations(ctx, pool, log); err != nil {
 		log.Fatal().Err(err).Msg("failed to run migrations")
 	}
+	pageFetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy, proxypool.NewStore(pool))
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
@@ -133,6 +136,7 @@ func main() {
 			r.Post("/proxies/{id}/check", handler.AdminCheckProxy(pool, log))
 			r.Post("/proxies/recheck", handler.AdminRecheckDeadProxies(pool, log))
 			r.Delete("/proxies/dead", handler.AdminDeleteDeadProxies(pool, log))
+			r.Post("/playground/run", handler.AdminPlayground(pool, rend, pageFetcher))
 		})
 	})
 

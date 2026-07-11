@@ -9,6 +9,7 @@ import { UserTrackersPage } from './pages/UserTrackersPage'
 import { TrackersPage } from './pages/TrackersPage'
 import { ProxiesPage } from './pages/ProxiesPage'
 import { StatusPage } from './pages/StatusPage'
+import { PlaygroundPage } from './pages/PlaygroundPage'
 
 function App() {
   const { credentials, login, logout } = useAuth()
@@ -47,6 +48,7 @@ function App() {
           path="/users"
           element={<UsersPage credentials={credentials} onAuthFailure={handleAuthFailure} />}
         />
+        <Route path="/playground" element={<PlaygroundPage credentials={credentials} onAuthFailure={handleAuthFailure} />} />
         <Route
           path="/users/:id/trackers"
           element={<UserTrackersPage credentials={credentials} onAuthFailure={handleAuthFailure} />}

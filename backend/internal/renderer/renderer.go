@@ -6,6 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
@@ -22,11 +27,15 @@ import (
 const acceptLanguage = "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"
 
 type Renderer struct {
-	allocCtx      context.Context
+	rootCtx       context.Context
 	cancel        context.CancelFunc
 	cookies       []scraper.Cookie
+	proxyServer   string
 	proxyUser     string
 	proxyPassword string
+	profileRoot   string
+	profileMu     sync.Mutex
+	profileLocks  map[string]*sync.Mutex
 }
 
 type PriceBlockCandidate struct {
@@ -41,8 +50,29 @@ type PriceBlockCandidate struct {
 
 func New(cookiesFile, proxyURL string) (*Renderer, error) {
 	proxyServer, proxyUser, proxyPassword := normalizeProxyURL(proxyURL)
+	cookies, err := scraper.LoadCookies(cookiesFile)
+	if err != nil {
+		return nil, err
+	}
+	profileRoot := os.Getenv("SCRAPER_PROFILE_DIR")
+	if profileRoot == "" {
+		profileRoot = filepath.Join(os.TempDir(), "pricebot-browser-profiles")
+	}
+	namespace := os.Getenv("RENDERER_PROFILE_NAMESPACE")
+	if namespace != "" {
+		profileRoot = filepath.Join(profileRoot, namespace)
+	}
+	if err := os.MkdirAll(profileRoot, 0700); err != nil {
+		return nil, fmt.Errorf("create browser profile directory: %w", err)
+	}
+	rootCtx, cancel := context.WithCancel(context.Background())
+	return &Renderer{rootCtx: rootCtx, cancel: cancel, cookies: cookies, proxyServer: proxyServer, proxyUser: proxyUser, proxyPassword: proxyPassword, profileRoot: profileRoot, profileLocks: map[string]*sync.Mutex{}}, nil
+}
+
+func (r *Renderer) allocatorOptions(profileDir string) []chromedp.ExecAllocatorOption {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath("/usr/bin/chromium"),
+		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
@@ -55,17 +85,11 @@ func New(cookiesFile, proxyURL string) (*Renderer, error) {
 		chromedp.Flag("lang", "pl-PL"),
 		chromedp.UserAgent(useragent.Random().UserAgent),
 	)
-	if proxyServer != "" {
-		opts = append(opts, chromedp.ProxyServer(proxyServer))
+	if r.proxyServer != "" {
+		opts = append(opts, chromedp.ProxyServer(r.proxyServer))
 	}
 
-	cookies, err := scraper.LoadCookies(cookiesFile)
-	if err != nil {
-		return nil, err
-	}
-
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	return &Renderer{allocCtx: allocCtx, cancel: cancel, cookies: cookies, proxyUser: proxyUser, proxyPassword: proxyPassword}, nil
+	return opts
 }
 
 func (r *Renderer) Close() {
@@ -74,8 +98,50 @@ func (r *Renderer) Close() {
 	}
 }
 
+var unsafeProfileChar = regexp.MustCompile(`[^a-zA-Z0-9.-]+`)
+
+func (r *Renderer) newProfileContext(rawURL string) (context.Context, context.CancelFunc, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return nil, nil, fmt.Errorf("invalid profile URL")
+	}
+	key := unsafeProfileChar.ReplaceAllString(parsed.Hostname(), "_")
+	r.profileMu.Lock()
+	lock := r.profileLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		r.profileLocks[key] = lock
+	}
+	r.profileMu.Unlock()
+	lock.Lock()
+	profileDir := filepath.Join(r.profileRoot, key)
+	if err := os.MkdirAll(profileDir, 0700); err != nil {
+		lock.Unlock()
+		return nil, nil, err
+	}
+	// Container hostnames change between deploys, so Chromium's singleton symlinks can
+	// look like a profile owned by another computer after an unclean shutdown.
+	for _, name := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
+		_ = os.Remove(filepath.Join(profileDir, name))
+	}
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(r.rootCtx, r.allocatorOptions(profileDir)...)
+	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	cancel := func() {
+		closeCtx, closeCancel := context.WithTimeout(browserCtx, 3*time.Second)
+		_ = chromedp.Cancel(closeCtx)
+		closeCancel()
+		cancelBrowser()
+		cancelAlloc()
+		lock.Unlock()
+	}
+	return browserCtx, cancel, nil
+}
+
 func (r *Renderer) Render(ctx context.Context, url string, waitTime time.Duration) (string, error) {
-	ctx, cancel := chromedp.NewContext(r.allocCtx)
+	ctx, cancel, err := r.newProfileContext(url)
+	if err != nil {
+		return "", err
+	}
 	defer cancel()
 
 	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
@@ -85,7 +151,7 @@ func (r *Renderer) Render(ctx context.Context, url string, waitTime time.Duratio
 	tasks := []chromedp.Action{
 		r.setupProxyAuth(),
 		setupRealBrowser(),
-		r.setCookies(),
+		r.setCookiesForURL(url),
 		chromedp.Navigate(url),
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		acceptCookieBanners(),
@@ -97,12 +163,16 @@ func (r *Renderer) Render(ctx context.Context, url string, waitTime time.Duratio
 	if err := chromedp.Run(ctx, tasks...); err != nil {
 		return "", err
 	}
+	_ = r.saveProfileCookies(ctx, url)
 
 	return html, nil
 }
 
 func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index int) (*PriceBlockCandidate, []byte, error) {
-	ctx, cancel := chromedp.NewContext(r.allocCtx)
+	ctx, cancel, err := r.newProfileContext(url)
+	if err != nil {
+		return nil, nil, err
+	}
 	defer cancel()
 
 	ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
@@ -444,7 +514,7 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
 	if err := chromedp.Run(ctx,
 		r.setupProxyAuth(),
 		setupRealBrowser(),
-		r.setCookies(),
+		r.setCookiesForURL(url),
 		chromedp.Navigate(url),
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		acceptCookieBanners(),
@@ -455,6 +525,7 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
 	); err != nil {
 		return nil, nil, err
 	}
+	_ = r.saveProfileCookies(ctx, url)
 	if candidate.Selector == "" {
 		return &candidate, nil, fmt.Errorf("price block not found; title=%q text=%q total_found=%d", candidate.Title, candidate.Text, candidate.TotalFound)
 	}
@@ -477,7 +548,10 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
 }
 
 func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (string, error) {
-	ctx, cancel := chromedp.NewContext(r.allocCtx)
+	ctx, cancel, err := r.newProfileContext(url)
+	if err != nil {
+		return "", err
+	}
 	defer cancel()
 
 	ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
@@ -525,7 +599,7 @@ func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (st
 	if err := chromedp.Run(ctx,
 		r.setupProxyAuth(),
 		setupRealBrowser(),
-		r.setCookies(),
+		r.setCookiesForURL(url),
 		chromedp.Navigate(url),
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		acceptCookieBanners(),
@@ -534,6 +608,7 @@ func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (st
 	); err != nil {
 		return "", err
 	}
+	_ = r.saveProfileCookies(ctx, url)
 	if text == "" {
 		return "", fmt.Errorf("selector not found: %s", selector)
 	}
@@ -637,13 +712,28 @@ if (originalQuery) {
 }
 
 func (r *Renderer) setCookies() chromedp.Action {
+	return r.setCookieList(r.cookies)
+}
+
+func (r *Renderer) setCookiesForURL(rawURL string) chromedp.Action {
+	cookies := append([]scraper.Cookie{}, r.cookies...)
+	if data, err := os.ReadFile(r.profileCookiePath(rawURL)); err == nil {
+		var jar scraper.CookieJar
+		if json.Unmarshal(data, &jar) == nil {
+			cookies = append(cookies, jar.Cookies...)
+		}
+	}
+	return r.setCookieList(cookies)
+}
+
+func (r *Renderer) setCookieList(cookies []scraper.Cookie) chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
-		if len(r.cookies) == 0 {
+		if len(cookies) == 0 {
 			return nil
 		}
 
-		params := make([]*network.CookieParam, 0, len(r.cookies))
-		for _, cookie := range r.cookies {
+		params := make([]*network.CookieParam, 0, len(cookies))
+		for _, cookie := range cookies {
 			param := &network.CookieParam{
 				Name:     cookie.Name,
 				Value:    cookie.Value,
@@ -672,6 +762,32 @@ func (r *Renderer) setCookies() chromedp.Action {
 		}
 		return nil
 	})
+}
+
+func (r *Renderer) profileCookiePath(rawURL string) string {
+	parsed, _ := url.Parse(rawURL)
+	key := unsafeProfileChar.ReplaceAllString(parsed.Hostname(), "_")
+	return filepath.Join(r.profileRoot, key, "pricebot-cookies.json")
+}
+
+func (r *Renderer) saveProfileCookies(ctx context.Context, rawURL string) error {
+	current, err := network.GetCookies().WithURLs([]string{rawURL}).Do(ctx)
+	if err != nil {
+		return err
+	}
+	jar := scraper.CookieJar{Cookies: make([]scraper.Cookie, 0, len(current))}
+	for _, cookie := range current {
+		jar.Cookies = append(jar.Cookies, scraper.Cookie{
+			Domain: cookie.Domain, ExpirationDate: cookie.Expires, HTTPOnly: cookie.HTTPOnly,
+			Name: cookie.Name, Path: cookie.Path, SameSite: strings.ToLower(cookie.SameSite.String()),
+			Secure: cookie.Secure, Session: cookie.Session, Value: cookie.Value,
+		})
+	}
+	data, err := json.Marshal(jar)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(r.profileCookiePath(rawURL), data, 0600)
 }
 
 func acceptCookieBanners() chromedp.Action {

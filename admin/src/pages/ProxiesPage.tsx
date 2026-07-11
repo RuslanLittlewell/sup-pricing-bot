@@ -59,6 +59,10 @@ export function ProxiesPage({
 
   const [showAdd, setShowAdd] = useState(false)
   const [addText, setAddText] = useState('')
+  const [networkType, setNetworkType] = useState<AdminProxy['networkType']>('unknown')
+  const [provider, setProvider] = useState('')
+  const [asn, setAsn] = useState('')
+  const [countryCode, setCountryCode] = useState('')
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
   const [addResult, setAddResult] = useState<{ added: number; invalid: string[] } | null>(null)
@@ -137,7 +141,12 @@ export function ProxiesPage({
     setAddError(null)
     setAddResult(null)
     try {
-      const result = await addProxies(credentials, addText)
+      const result = await addProxies(credentials, addText, {
+        networkType,
+        provider,
+        asn,
+        countryCode,
+      })
       setAddResult(result)
       setAddText('')
       setProxies(await fetchProxies(credentials))
@@ -187,13 +196,22 @@ export function ProxiesPage({
         </div>
       </CardHeader>
       <CardContent>
-        <Table>
+        <div className="space-y-8">
+        {(['residential', 'mobile', 'datacenter', 'unknown'] as const).map((type) => {
+          const rows = proxies.filter((proxy) => proxy.networkType === type)
+          return <section key={type}>
+          <div className="mb-3 flex items-center gap-2">
+            <h3 className="text-base font-semibold capitalize">{type} proxies</h3>
+            <Badge variant="outline">{rows.length}</Badge>
+          </div>
+          <Table>
           <TableHeader>
             <TableRow>
               <TableHead className="w-10">#</TableHead>
               <TableHead>Address</TableHead>
               <TableHead>Country</TableHead>
               <TableHead>Source</TableHead>
+              <TableHead>Provider / ASN</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Used</TableHead>
               <TableHead>Last checked</TableHead>
@@ -202,14 +220,14 @@ export function ProxiesPage({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {proxies.length === 0 ? (
+            {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-muted-foreground">
-                  No proxies yet — add some, or wait for the worker's next cycle.
+                <TableCell colSpan={10} className="text-muted-foreground">
+                  No {type} proxies.
                 </TableCell>
               </TableRow>
             ) : (
-              proxies.map((p, i) => (
+              rows.map((p, i) => (
                 <TableRow key={p.id}>
                   <TableCell className="text-muted-foreground">{i + 1}</TableCell>
                   <TableCell className="font-mono text-xs">
@@ -231,6 +249,10 @@ export function ProxiesPage({
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline">{p.source}</Badge>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    <div>{p.provider || '—'}</div>
+                    <div className="font-mono">{p.asn || '—'}</div>
                   </TableCell>
                   <TableCell>{statusBadge(p.status)}</TableCell>
                   <TableCell className="text-right">{p.useCount}</TableCell>
@@ -255,6 +277,9 @@ export function ProxiesPage({
             )}
           </TableBody>
         </Table>
+        </section>
+        })}
+        </div>
       </CardContent>
 
       {showAdd && (
@@ -272,6 +297,33 @@ export function ProxiesPage({
               (<code className="font-mono">host:port</code> without auth also works). Paste the
               provider's list and submit.
             </p>
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <label className="text-sm">
+                <span className="mb-1 block text-muted-foreground">Network type</span>
+                <select
+                  className="h-9 w-full rounded-md border border-input bg-background px-3"
+                  value={networkType}
+                  onChange={(e) => setNetworkType(e.target.value as AdminProxy['networkType'])}
+                >
+                  <option value="unknown">Unknown</option>
+                  <option value="residential">Residential</option>
+                  <option value="mobile">Mobile</option>
+                  <option value="datacenter">Datacenter</option>
+                </select>
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block text-muted-foreground">Country code</span>
+                <input className="h-9 w-full rounded-md border border-input bg-transparent px-3" maxLength={2} placeholder="PL" value={countryCode} onChange={(e) => setCountryCode(e.target.value)} />
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block text-muted-foreground">Provider</span>
+                <input className="h-9 w-full rounded-md border border-input bg-transparent px-3" placeholder="Provider name" value={provider} onChange={(e) => setProvider(e.target.value)} />
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block text-muted-foreground">ASN</span>
+                <input className="h-9 w-full rounded-md border border-input bg-transparent px-3" placeholder="AS12345" value={asn} onChange={(e) => setAsn(e.target.value)} />
+              </label>
+            </div>
             <textarea
               className="mt-3 h-48 w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               placeholder={'31.59.20.176:6754:user:pass\n45.38.107.97:6014:user:pass'}

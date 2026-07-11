@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	neturl "net/url"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
@@ -223,7 +225,38 @@ func tryZaraPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram
 	markup := makeInlineKeyboard(
 		[]inlineButton{button(tr(lang, "button_yes"), "candidate:yes"), button(tr(lang, "button_no"), "candidate:no")},
 	)
-	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "candidate_text_caption"), price, currency), markup)
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "candidate_text_caption"), price), markup)
+	return true
+}
+
+func tryWildberriesPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, productURL string, log zerolog.Logger, fetcher *extractor.PageFetcher) bool {
+	if fetcher == nil {
+		return false
+	}
+	apiURL, err := shops.WildberriesAPIURL(productURL)
+	if err != nil {
+		return false
+	}
+	body, _, err := fetcher.Fetch(apiURL)
+	if err != nil {
+		log.Warn().Err(err).Str("url", productURL).Msg("wildberries price candidate: API fetch failed")
+		return false
+	}
+	product, err := shops.ParseWildberriesProduct(body, shops.WildberriesArticle(productURL))
+	if err != nil || !product.InStock || product.Price <= 0 {
+		return false
+	}
+	rule, _ := json.Marshal(map[string]string{"type": "wildberries_price", "article": product.Article})
+	if _, err := pool.Exec(ctx, `
+		UPDATE telegram_states
+		SET step = 'awaiting_confirm', title = $2, initial_price = $3, currency = '', candidate_index = 0, rule = $4, updated_at = now()
+		WHERE telegram_id = $1
+	`, chatID, product.Title, product.Price, rule); err != nil {
+		log.Error().Err(err).Msg("failed to save wildberries price candidate state")
+		return false
+	}
+	markup := makeInlineKeyboard([]inlineButton{button(tr(lang, "button_yes"), "candidate:yes"), button(tr(lang, "button_no"), "candidate:no")})
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "candidate_text_caption"), product.Price), markup)
 	return true
 }
 
@@ -250,12 +283,12 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	if fetcher == nil {
 		return false
 	}
-	body, fetchMethod, err := fetcher.Fetch(url)
+	body, fetchMethod, err := fetchPageWithTimeout(fetcher, url, 30*time.Second)
 	if err != nil {
 		log.Warn().Err(err).Str("url", url).Msg("text price candidate: fetch failed")
 		if fallback := extractor.NewSearchFallback(proxypool.NewStore(pool)); fallback != nil {
 			notifyStillSearching(tg, chatID, statusMsgID, lang)
-			result, fallbackErr := fallback.Extract(nil, url)
+			result, fallbackErr := extractWithTimeout(fallback, nil, url, 40*time.Second)
 			if fallbackErr == nil && len(result.Candidates) > 0 {
 				return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, "", result, "page fetch failed: "+err.Error(), log)
 			}
@@ -287,7 +320,7 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	// search tiers — always try them before rejecting.
 	if fallback := extractor.NewSearchFallback(proxypool.NewStore(pool)); fallback != nil {
 		notifyStillSearching(tg, chatID, statusMsgID, lang)
-		fbResult, fbErr := fallback.Extract(body, url)
+		fbResult, fbErr := extractWithTimeout(fallback, body, url, 40*time.Second)
 		if fbErr == nil && len(fbResult.Candidates) > 0 {
 			return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, fetchMethod, fbResult, directErr, log)
 		}
@@ -301,6 +334,37 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	}
 	rejectTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, direct, directErr, log)
 	return true
+}
+
+func fetchPageWithTimeout(fetcher *extractor.PageFetcher, url string, timeout time.Duration) ([]byte, string, error) {
+	type response struct {
+		body   []byte
+		method string
+		err    error
+	}
+	done := make(chan response, 1)
+	go func() { body, method, err := fetcher.Fetch(url); done <- response{body, method, err} }()
+	select {
+	case result := <-done:
+		return result.body, result.method, result.err
+	case <-time.After(timeout):
+		return nil, "", fmt.Errorf("page fetch timed out after %s", timeout)
+	}
+}
+
+func extractWithTimeout(selected extractor.Extractor, body []byte, url string, timeout time.Duration) (*extractor.ExtractionResult, error) {
+	type response struct {
+		result *extractor.ExtractionResult
+		err    error
+	}
+	done := make(chan response, 1)
+	go func() { result, err := selected.Extract(body, url); done <- response{result, err} }()
+	select {
+	case result := <-done:
+		return result.result, result.err
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("extraction timed out after %s", timeout)
+	}
 }
 
 func handleTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency, fetchMethod string, result *extractor.ExtractionResult, directErr string, log zerolog.Logger) bool {
@@ -335,6 +399,7 @@ func tryAcceptCeneoMinPrice(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		if !ok {
 			continue
 		}
+		price = normalizePricePrecision(price)
 		currency := candidate.Currency
 		if currency == "" {
 			currency = fallbackCurrency
@@ -348,7 +413,7 @@ func tryAcceptCeneoMinPrice(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			Str("currency", currency).
 			Str("method", extractor.RuleType(candidate.Rule)).
 			Msg("telegram ceneo minimum price accepted")
-		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "aggregator_min_price_created"), price, currency, expectedPrice))
+		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "aggregator_min_price_created"), price, expectedPrice))
 		createTrackerFromState(ctx, pool, tg, chatID, userID, lang, telegramState{
 			URL:          url,
 			Title:        result.Title,
@@ -372,7 +437,8 @@ func isCeneoURL(rawURL string) bool {
 }
 
 // tryCreateTrackerFromCandidates creates the tracker if any candidate matches the
-// entered price exactly (and the requested URL, when the candidate carries a source).
+// entered price exactly or by whole-number part (and the requested URL, when the
+// candidate carries a source). Users often omit fractional digits when typing a price.
 // It returns false without side effects when nothing matches, so the caller can try
 // further extraction tiers before rejecting.
 func tryCreateTrackerFromCandidates(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency, fetchMethod string, result *extractor.ExtractionResult, directErr string, log zerolog.Logger) bool {
@@ -385,13 +451,14 @@ func tryCreateTrackerFromCandidates(ctx context.Context, pool *pgxpool.Pool, tg 
 		if !ok {
 			continue
 		}
+		price = normalizePricePrecision(price)
 		currency := candidate.Currency
 		if currency == "" {
 			currency = fallbackCurrency
 		}
 
 		sourceMatches := candidate.SourceURL == "" || extractor.SameURL(candidate.SourceURL, url)
-		priceMatches := priceCents(price) == priceCents(expectedPrice)
+		priceMatches := pricesMatchUserInput(price, expectedPrice)
 		if sourceMatches && priceMatches {
 			if isSearchFallbackRule(candidate.Rule) {
 				recordExtractionFailure(ctx, pool, userID, url, fmt.Sprintf("%s; resolved by %s exact URL+price fallback", directErr, extractor.RuleType(candidate.Rule)), log)
@@ -448,6 +515,19 @@ func priceCents(price float64) int64 {
 	return int64(price*100 + 0.5)
 }
 
+func pricesMatchUserInput(found, entered float64) bool {
+	found = normalizePricePrecision(found)
+	entered = normalizePricePrecision(entered)
+	return priceCents(found) == priceCents(entered) || int64(found) == int64(entered)
+}
+
+// normalizePricePrecision discards parser noise beyond the two monetary decimal places.
+// Truncation is intentional: 709.00531 represents 709.00 with garbage suffix digits,
+// not a value that should round up to 709.01.
+func normalizePricePrecision(price float64) float64 {
+	return math.Trunc((price+1e-9)*100) / 100
+}
+
 func getTelegramState(ctx context.Context, pool *pgxpool.Pool, telegramID int64) (telegramState, bool) {
 	var state telegramState
 	err := pool.QueryRow(ctx, `
@@ -475,6 +555,14 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	// one. shops.ParseZaraPrice reads the same reliably-lowest price directly instead, so
 	// try that first rather than gambling on text matching for this site.
 	if index == 0 && shops.IsZaraURL(url) && tryZaraPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, currency, log, fetcher) {
+		return
+	}
+	if index == 0 && shops.IsWildberriesURL(url) {
+		if tryWildberriesPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, log, fetcher) {
+			return
+		}
+		SendTelegramMessage(tg, chatID, tr(lang, "price_not_found"))
+		clearTelegramState(ctx, pool, chatID)
 		return
 	}
 
