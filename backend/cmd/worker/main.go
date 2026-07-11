@@ -213,7 +213,13 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 
 	log.Info().Str("tracker_id", id).Str("url", url).Msg("checking stock tracker")
 
-	body, fetchMethod, err := fetcher.Fetch(url)
+	fetchURL := url
+	if extractor.RuleType(extractionRuleJSON) == "wildberries_stock" {
+		if apiURL, apiErr := shops.WildberriesAPIURL(url); apiErr == nil {
+			fetchURL = apiURL
+		}
+	}
+	body, fetchMethod, err := fetcher.Fetch(fetchURL)
 	if err != nil {
 		log.Error().Err(err).Str("tracker_id", id).Msg("stock fetch failed")
 		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, manualCheck, log)
@@ -362,6 +368,28 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, string, string, error) {
 
 	ruleType := extractor.RuleType(extractionRuleJSON)
+	if ruleType == "wildberries_price" || (ruleType == "" && shops.IsWildberriesURL(url)) {
+		apiURL, apiErr := shops.WildberriesAPIURL(url)
+		if apiErr != nil {
+			return 0, "", "", "", "", apiErr
+		}
+		body, fetchMethod, fetchErr := fetcher.Fetch(apiURL)
+		if fetchErr != nil {
+			return 0, "", "", "", "", fmt.Errorf("wildberries API fetch failed: %w", fetchErr)
+		}
+		product, parseErr := shops.ParseWildberriesProduct(body, shops.WildberriesArticle(url))
+		if parseErr != nil {
+			return 0, "", "", "", "", parseErr
+		}
+		if !product.InStock || product.Price <= 0 {
+			return 0, "", "", "", "", fmt.Errorf("wildberries product has no available priced sizes")
+		}
+		stock := "out_of_stock"
+		if product.InStock {
+			stock = "in_stock"
+		}
+		return product.Price, "", stock, "wildberries_price", fetchMethod, nil
+	}
 	if isSearchFallbackRuleType(ruleType) {
 		if searchFallback == nil {
 			return 0, "", "", "", "", fmt.Errorf("search fallback disabled for %s tracker", ruleType)

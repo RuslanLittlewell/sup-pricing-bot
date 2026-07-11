@@ -59,13 +59,16 @@ func NewOpenSERP(proxies *proxypool.Store) *OpenSERPExtractor {
 // allow_request_proxy_url enabled for this to take effect (see deploy/docker-compose.prod.yml's
 // openserp service). Silently does nothing when no pool is wired up or the pool is empty,
 // so a request always goes out one way or another.
-func (e *OpenSERPExtractor) setProxyHeader(req *http.Request) {
+func (e *OpenSERPExtractor) setProxyHeader(req *http.Request, targetURL string) {
 	if e.proxies == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), 3*time.Second)
 	defer cancel()
-	picked, ok := e.proxies.Pick(ctx)
+	picked, ok := e.proxies.PickResidentialForURL(ctx, targetURL)
+	if !ok {
+		picked, ok = e.proxies.PickNonResidential(ctx)
+	}
 	if !ok {
 		return
 	}
@@ -118,7 +121,7 @@ func (e *OpenSERPExtractor) extractDirect(pageURL string) (*ExtractionResult, er
 	var body []byte
 	var lastErr error
 	for attempt := 1; attempt <= openSERPProxyRetryAttempts; attempt++ {
-		body, lastErr = e.doExtractAttempt(endpoint.String())
+		body, lastErr = e.doExtractAttempt(endpoint.String(), pageURL)
 		if lastErr == nil {
 			break
 		}
@@ -179,7 +182,7 @@ func (e *OpenSERPExtractor) extractDirect(pageURL string) (*ExtractionResult, er
 // doExtractAttempt performs one /extract call — pulled out of extractDirect so a retry
 // (see openSERPProxyRetryAttempts) rebuilds the request from scratch, picking a fresh
 // proxy via setProxyHeader rather than reusing one that may have just failed.
-func (e *OpenSERPExtractor) doExtractAttempt(endpoint string) ([]byte, error) {
+func (e *OpenSERPExtractor) doExtractAttempt(endpoint, targetURL string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), openSERPTimeout)
 	defer cancel()
 
@@ -191,7 +194,7 @@ func (e *OpenSERPExtractor) doExtractAttempt(endpoint string) ([]byte, error) {
 		req.Header.Set("Authorization", "Bearer "+e.apiKey)
 		req.Header.Set("X-API-Key", e.apiKey)
 	}
-	e.setProxyHeader(req)
+	e.setProxyHeader(req, targetURL)
 
 	resp, err := e.httpClient.Do(req)
 	if err != nil {
@@ -245,7 +248,7 @@ func (e *OpenSERPExtractor) doRequest(pageURL string) ([]byte, int, error) {
 	var status int
 	var lastErr error
 	for attempt := 1; attempt <= openSERPProxyRetryAttempts; attempt++ {
-		body, status, lastErr = e.doSearchAttempt(endpoint.String())
+		body, status, lastErr = e.doSearchAttempt(endpoint.String(), pageURL)
 		if lastErr == nil {
 			break
 		}
@@ -256,7 +259,7 @@ func (e *OpenSERPExtractor) doRequest(pageURL string) ([]byte, int, error) {
 // doSearchAttempt performs one /mega/search call — pulled out of doRequest so a retry
 // (see openSERPProxyRetryAttempts) rebuilds the request from scratch, picking a fresh
 // proxy via setProxyHeader rather than reusing one that may have just failed.
-func (e *OpenSERPExtractor) doSearchAttempt(endpoint string) ([]byte, int, error) {
+func (e *OpenSERPExtractor) doSearchAttempt(endpoint, targetURL string) ([]byte, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), openSERPTimeout)
 	defer cancel()
 
@@ -268,7 +271,7 @@ func (e *OpenSERPExtractor) doSearchAttempt(endpoint string) ([]byte, int, error
 		req.Header.Set("Authorization", "Bearer "+e.apiKey)
 		req.Header.Set("X-API-Key", e.apiKey)
 	}
-	e.setProxyHeader(req)
+	e.setProxyHeader(req, targetURL)
 
 	resp, err := e.httpClient.Do(req)
 	if err != nil {

@@ -85,9 +85,10 @@ func DetectStockStatusFromText(htmlContent []byte) string {
 // StockRule is a stock tracker's extraction_rule — set for trackers that watch one
 // specific variant (currently only "zara_size") rather than the item as a whole.
 type StockRule struct {
-	Type string `json:"type"`
-	Size string `json:"size"`
-	SKU  string `json:"sku"`
+	Type    string `json:"type"`
+	Size    string `json:"size"`
+	SKU     string `json:"sku"`
+	Article string `json:"article"`
 }
 
 // DetectStockStatus resolves in_stock/out_of_stock for a stock tracker and reports which
@@ -115,6 +116,16 @@ func DetectStockStatus(extractionRuleJSON []byte, body []byte) (status, method s
 				}
 			}
 			return "", "", fmt.Errorf("size %q is no longer listed on the page", rule.Size)
+		}
+		if jsonErr := json.Unmarshal(extractionRuleJSON, &rule); jsonErr == nil && rule.Type == "wildberries_stock" {
+			product, werr := shops.ParseWildberriesProduct(body, rule.Article)
+			if werr != nil {
+				return "", "", fmt.Errorf("wildberries stock lookup failed: %w", werr)
+			}
+			if product.InStock {
+				return "in_stock", "wildberries_api", nil
+			}
+			return "out_of_stock", "wildberries_api", nil
 		}
 	}
 	status = DetectStockStatusFromText(body)

@@ -2,6 +2,13 @@ package extractor
 
 import "testing"
 
+func TestLamodaSPSNPageIsBotChallenge(t *testing.T) {
+	body := []byte(`<script>function get_cookie_spsn() { return "spsn=123"; }</script>`)
+	if !isBotChallenge(body) {
+		t.Fatal("expected Lamoda SPSN page to be detected as bot challenge")
+	}
+}
+
 // Some sites embed a "price" JSON field in minor units (e.g. grosze/cents) as a
 // bare integer rather than a decimal amount. Without an alternate reading, a
 // bare "22900" would be trusted as literally 22900, 100x too large.

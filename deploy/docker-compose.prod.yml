@@ -70,6 +70,8 @@ services:
       BOT_USERNAME: ${BOT_USERNAME}
       TELEGRAM_WEBHOOK_URL: https://${API_DOMAIN}/api/telegram/webhook
       SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
+      SCRAPER_PROFILE_DIR: /var/lib/pricebot/browser-profiles
+      RENDERER_PROFILE_NAMESPACE: backend
       SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
       CF_RELAY_URL: ${CF_RELAY_URL:-}
       CF_RELAY_TOKEN: ${CF_RELAY_TOKEN:-}
@@ -86,6 +88,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     volumes:
       - ./secrets/scraper-cookies.json:/run/secrets/scraper-cookies.json:ro
+      - browser_profiles:/var/lib/pricebot/browser-profiles
     ports:
       - "127.0.0.1:${BACKEND_HOST_PORT:-18080}:8080"
     depends_on:
@@ -117,6 +120,8 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       BOT_USERNAME: ${BOT_USERNAME}
       SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
+      SCRAPER_PROFILE_DIR: /var/lib/pricebot/browser-profiles
+      RENDERER_PROFILE_NAMESPACE: worker
       SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
       CF_RELAY_URL: ${CF_RELAY_URL:-}
       CF_RELAY_TOKEN: ${CF_RELAY_TOKEN:-}
@@ -131,6 +136,7 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-}
     volumes:
       - ./secrets/scraper-cookies.json:/run/secrets/scraper-cookies.json:ro
+      - browser_profiles:/var/lib/pricebot/browser-profiles
     depends_on:
       db:
         condition: service_healthy
@@ -177,3 +183,4 @@ volumes:
   caddy_data:
   caddy_config:
   uptime_kuma_data:
+  browser_profiles:

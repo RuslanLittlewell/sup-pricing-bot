@@ -35,9 +35,9 @@ function methodBadge(method: string) {
   )
 }
 
-function formatPrice(price: number | null, currency: string) {
+function formatPrice(price: number | null) {
   if (price === null) return '—'
-  return `${price.toFixed(2)} ${currency}`
+  return price.toFixed(2)
 }
 
 // How the page body was fetched, independent of how the price was parsed out of it — the
@@ -150,9 +150,9 @@ export function UserTrackersPage({
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         <div className="flex flex-col gap-0.5">
-                          <span>{formatPrice(t.currentPrice, t.currency)}</span>
+                          <span>{formatPrice(t.currentPrice)}</span>
                           <span className="text-xs text-muted-foreground">
-                            initial {formatPrice(t.initialPrice, t.currency)}
+                            initial {formatPrice(t.initialPrice)}
                           </span>
                         </div>
                       </TableCell>
