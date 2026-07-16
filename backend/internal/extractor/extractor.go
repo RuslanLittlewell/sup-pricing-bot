@@ -15,10 +15,12 @@ type PriceCandidate struct {
 }
 
 type ExtractionResult struct {
-	Title       string           `json:"title,omitempty"`
-	ImageURL    string           `json:"image_url,omitempty"`
-	StockStatus string           `json:"stock_status,omitempty"`
-	Candidates  []PriceCandidate `json:"candidates"`
+	Title           string           `json:"title,omitempty"`
+	ImageURL        string           `json:"image_url,omitempty"`
+	StockStatus     string           `json:"stock_status,omitempty"`
+	RegularPrice    string           `json:"regular_price,omitempty"`
+	DiscountPercent int              `json:"discount_percent,omitempty"`
+	Candidates      []PriceCandidate `json:"candidates"`
 }
 
 type Extractor interface {

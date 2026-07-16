@@ -2,6 +2,23 @@ package extractor
 
 import "testing"
 
+func TestGenericExtractsHebePromotionalPriceBeforeJSONLDRegularPrice(t *testing.T) {
+	body := []byte(`<html><body>
+<form data-product-gtm="{&quot;currency&quot;:&quot;PLN&quot;,&quot;regular_price&quot;:89.99,&quot;current_price&quot;:62.99}"></form>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"Round Lab","offers":{"price":89.99,"priceCurrency":"PLN"}}</script>
+</body></html>`)
+	result, err := NewGeneric().Extract(body, "https://www.hebe.pl/product.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Candidates) < 1 || result.Candidates[0].Price != "62.99" || RuleType(result.Candidates[0].Rule) != "hebe_gtm" {
+		t.Fatalf("expected Hebe current price first, got %+v", result.Candidates)
+	}
+	if result.RegularPrice != "89.99" || result.DiscountPercent != 30 {
+		t.Fatalf("expected regular price 89.99 and 30%% discount, got %+v", result)
+	}
+}
+
 func TestLamodaSPSNPageIsBotChallenge(t *testing.T) {
 	body := []byte(`<script>function get_cookie_spsn() { return "spsn=123"; }</script>`)
 	if !isBotChallenge(body) {
