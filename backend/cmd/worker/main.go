@@ -368,6 +368,21 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 	url string, extractionRuleJSON []byte, fallbackCurrency string, referencePrice *float64) (float64, string, string, string, string, error) {
 
 	ruleType := extractor.RuleType(extractionRuleJSON)
+	if shops.IsHebeURL(url) {
+		body, fetchMethod, err := fetcher.Fetch(url)
+		if err != nil {
+			return 0, "", "", "", "", fmt.Errorf("fetch failed: %w", err)
+		}
+		hebePrice, err := shops.ParseHebePrice(body)
+		if err != nil {
+			return 0, "", "", "", "", err
+		}
+		currency := hebePrice.Currency
+		if currency == "" {
+			currency = fallbackCurrency
+		}
+		return hebePrice.Current, currency, extractor.DetectStockStatusFromText(body), shops.HebePriceMethod, fetchMethod, nil
+	}
 	if ruleType == "wildberries_price" || (ruleType == "" && shops.IsWildberriesURL(url)) {
 		apiURL, apiErr := shops.WildberriesAPIURL(url)
 		if apiErr != nil {

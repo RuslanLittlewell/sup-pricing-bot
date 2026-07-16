@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/littlewell/price-tracker/internal/shops"
 	"golang.org/x/net/html"
 )
 
@@ -34,6 +35,20 @@ func (e *GenericExtractor) Extract(htmlContent []byte, url string) (*ExtractionR
 	doc, err := html.Parse(strings.NewReader(string(htmlContent)))
 	if err != nil {
 		return result, nil
+	}
+
+	if shops.IsHebeURL(url) {
+		if hebePrice, hebeErr := shops.ParseHebePrice(htmlContent); hebeErr == nil {
+			rule, _ := json.Marshal(map[string]string{"type": shops.HebePriceMethod, "field": "current_price"})
+			result.Candidates = append(result.Candidates, PriceCandidate{
+				Price: fmt.Sprintf("%.2f", hebePrice.Current), Currency: hebePrice.Currency,
+				Confidence: 1, Label: "Hebe current promotional price", Rule: rule,
+			})
+			if hebePrice.Regular > hebePrice.Current {
+				result.RegularPrice = fmt.Sprintf("%.2f", hebePrice.Regular)
+				result.DiscountPercent = hebePrice.DiscountPercent
+			}
+		}
 	}
 
 	if ld := extractJSONLD(doc); ld != nil {

@@ -15,6 +15,16 @@ func TestDetectStockStatusGenericKeywordScan(t *testing.T) {
 	}
 }
 
+func TestDetectStockStatusPolishNotifyMePhrase(t *testing.T) {
+	status, method, err := DetectStockStatus(nil, []byte(`<html><button>Powiadom mnie</button></html>`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != "out_of_stock" || method != "keyword_scan" {
+		t.Fatalf("expected out_of_stock/keyword_scan, got %s/%s", status, method)
+	}
+}
+
 func TestDetectStockStatusEmptyBodyErrors(t *testing.T) {
 	// A degenerate (empty/truncated) response must not be read as in_stock — that produced
 	// spurious "back in stock" notifications. It should surface as an extraction error.

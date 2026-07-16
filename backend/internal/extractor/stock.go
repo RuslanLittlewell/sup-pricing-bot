@@ -37,6 +37,7 @@ var outOfStockPhrases = []string{
 	"oczekujemy dostawy",
 	"wkrótce dostępny",
 	"zapytaj o dostępność",
+	"powiadom mnie",
 	"brak u dostawcy",
 	"produkt wycofany ze sprzedaży",
 	// Русский
