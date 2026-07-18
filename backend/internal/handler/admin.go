@@ -44,6 +44,8 @@ type adminUserTracker struct {
 	URL                    string   `json:"url"`
 	Domain                 string   `json:"domain"`
 	Status                 string   `json:"status"`
+	TrackingMode           string   `json:"trackingMode"`
+	StockStatus            string   `json:"stockStatus"`
 	InitialPrice           float64  `json:"initialPrice"`
 	CurrentPrice           *float64 `json:"currentPrice"`
 	Currency               string   `json:"currency"`
@@ -251,7 +253,8 @@ func AdminUserTrackers(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc 
 
 		rows, err := pool.Query(ctx, `
 			SELECT t.id, COALESCE(NULLIF(t.title, ''), t.domain), t.url, t.domain, t.status,
-			       t.initial_price, t.current_price, t.currency, t.tracking_mode,
+			       t.tracking_mode, t.current_stock_status,
+			       t.initial_price, t.current_price, t.currency,
 			       COALESCE(t.extraction_rule->>'type', 'unknown'),
 			       COALESCE((
 			           SELECT pp.extraction_method FROM price_points pp
@@ -288,14 +291,14 @@ func AdminUserTrackers(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc 
 		for rows.Next() {
 			var (
 				t                 adminUserTracker
-				trackingMode      string
 				lastCheckedAt     *string
 				latestPriceMethod string
 				latestStockMethod string
 				latestFetchMethod string
 			)
 			if err := rows.Scan(&t.ID, &t.Title, &t.URL, &t.Domain, &t.Status,
-				&t.InitialPrice, &t.CurrentPrice, &t.Currency, &trackingMode,
+				&t.TrackingMode, &t.StockStatus,
+				&t.InitialPrice, &t.CurrentPrice, &t.Currency,
 				&t.ExtractionMethod, &latestPriceMethod, &latestStockMethod, &latestFetchMethod,
 				&t.CreatedAt, &lastCheckedAt, &t.ConsecutiveErrors, &t.LastError); err != nil {
 				log.Error().Err(err).Msg("failed to scan admin user tracker row")
@@ -304,7 +307,7 @@ func AdminUserTrackers(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc 
 			}
 			t.LastCheckedAt = lastCheckedAt
 			t.LatestFetchMethod = latestFetchMethod
-			if trackingMode == "stock" {
+			if t.TrackingMode == "stock" {
 				// Stock trackers don't all set extraction_rule (only the size-specific ones
 				// do; a plain whole-item tracker has none) — the latest recorded check is the
 				// only reliable source for which method actually resolves it.

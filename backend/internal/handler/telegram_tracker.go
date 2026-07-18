@@ -159,6 +159,10 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 
 	stockStatus := extractor.DetectStockStatusFromText(body)
 	title := ""
+	if shops.IsHebeURL(url) && shops.HasHebeAddToCartButton(body) {
+		stockStatus = "in_stock"
+		stockMethod = shops.HebeStockMethod
+	}
 	if shops.IsWildberriesURL(url) {
 		product, parseErr := shops.ParseWildberriesProduct(body, shops.WildberriesArticle(url))
 		if parseErr != nil {

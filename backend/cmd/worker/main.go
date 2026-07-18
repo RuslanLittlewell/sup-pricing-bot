@@ -232,6 +232,10 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, manualCheck, log)
 		return
 	}
+	if shops.IsHebeURL(url) && shops.HasHebeAddToCartButton(body) {
+		stockStatus = "in_stock"
+		stockMethod = shops.HebeStockMethod
+	}
 
 	pool.Exec(ctx, `
 		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method, fetch_method)
