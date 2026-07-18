@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, CircleCheck, CircleHelp, CircleX } from 'lucide-react'
 import { fetchUserTrackers, type UserTracker, type Credentials } from '@/api'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -38,6 +38,31 @@ function methodBadge(method: string) {
 function formatPrice(price: number | null) {
   if (price === null) return '—'
   return price.toFixed(2)
+}
+
+function stockStatusBadge(status: UserTracker['stockStatus']) {
+  if (status === 'in_stock') {
+    return (
+      <Badge className="border-emerald-600/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
+        <CircleCheck data-icon="inline-start" />
+        In stock
+      </Badge>
+    )
+  }
+  if (status === 'out_of_stock') {
+    return (
+      <Badge className="border-red-600/30 bg-red-500/15 text-red-700 dark:text-red-400">
+        <CircleX data-icon="inline-start" />
+        Out of stock
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="outline" className="text-muted-foreground">
+      <CircleHelp data-icon="inline-start" />
+      Unknown
+    </Badge>
+  )
 }
 
 // How the page body was fetched, independent of how the price was parsed out of it — the
@@ -107,6 +132,7 @@ export function UserTrackersPage({
                 <TableRow>
                   <TableHead>Product</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Availability</TableHead>
                   <TableHead>Price</TableHead>
                   <TableHead>Method</TableHead>
                   <TableHead>Created</TableHead>
@@ -116,7 +142,7 @@ export function UserTrackersPage({
               <TableBody>
                 {trackers.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-muted-foreground">
+                    <TableCell colSpan={7} className="text-muted-foreground">
                       No trackers for this user.
                     </TableCell>
                   </TableRow>
@@ -148,6 +174,7 @@ export function UserTrackersPage({
                           ) : null}
                         </div>
                       </TableCell>
+                      <TableCell>{stockStatusBadge(t.stockStatus)}</TableCell>
                       <TableCell className="whitespace-nowrap">
                         <div className="flex flex-col gap-0.5">
                           <span>{formatPrice(t.currentPrice)}</span>

@@ -11,6 +11,7 @@ import (
 )
 
 const HebePriceMethod = "hebe_gtm"
+const HebeStockMethod = "hebe_add_to_cart"
 
 func IsHebeURL(rawURL string) bool {
 	parsed, err := url.Parse(rawURL)
@@ -26,6 +27,78 @@ type HebePrice struct {
 	Regular         float64
 	DiscountPercent int
 	Currency        string
+}
+
+// HasHebeAddToCartButton reports whether Hebe renders the active add-to-cart
+// control for the main product. Hebe's page contains generic and hidden strings such
+// as "Powiadom mnie" and "niedostępny" even when the product is available, so a
+// whole-document keyword scan produces false out-of-stock results. The
+// add-product-detail/js-add-to-cart-initial classes identify the product-detail
+// control rather than buttons belonging to recommendations.
+func HasHebeAddToCartButton(body []byte) bool {
+	doc, err := html.Parse(strings.NewReader(string(body)))
+	if err != nil {
+		return false
+	}
+
+	var found bool
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if found {
+			return
+		}
+		if n.Type == html.ElementNode && n.Data == "button" {
+			var className, title, value string
+			for _, attr := range n.Attr {
+				switch attr.Key {
+				case "class":
+					className = attr.Val
+				case "title":
+					title = attr.Val
+				case "value":
+					value = attr.Val
+				}
+			}
+			isProductButton := hasClass(className, "add-product-detail") || hasClass(className, "js-add-to-cart-initial")
+			if isProductButton && (isHebeAddToCartLabel(title) || isHebeAddToCartLabel(value) || isHebeAddToCartLabel(nodeText(n))) {
+				found = true
+				return
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return found
+}
+
+func hasClass(className, target string) bool {
+	for _, class := range strings.Fields(className) {
+		if class == target {
+			return true
+		}
+	}
+	return false
+}
+
+func isHebeAddToCartLabel(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "DODAJ DO KOSZYKA")
+}
+
+func nodeText(n *html.Node) string {
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(current *html.Node) {
+		if current.Type == html.TextNode {
+			b.WriteString(current.Data)
+		}
+		for c := current.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(n)
+	return b.String()
 }
 
 // ParseHebePrice reads Hebe's analytics payload. JSON-LD can expose the regular

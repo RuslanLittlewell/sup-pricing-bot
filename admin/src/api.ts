@@ -12,6 +12,8 @@ export interface UserTracker {
   url: string
   domain: string
   status: string
+  trackingMode: 'price' | 'stock'
+  stockStatus: 'in_stock' | 'out_of_stock' | 'unknown'
   initialPrice: number
   currentPrice: number | null
   currency: string

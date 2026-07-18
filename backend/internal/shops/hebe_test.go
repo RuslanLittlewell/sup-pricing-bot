@@ -21,3 +21,25 @@ func TestIsHebeURL(t *testing.T) {
 		t.Fatal("did not expect non-Hebe URL")
 	}
 }
+
+func TestHasHebeAddToCartButtonForMainProduct(t *testing.T) {
+	body := []byte(`<html><body>
+		<div hidden>Powiadom mnie — produkt niedostępny</div>
+		<button class="add-to-cart add-product-detail js-add-to-cart js-add-to-cart-initial" type="submit" title="DODAJ DO KOSZYKA" value="DODAJ DO KOSZYKA">
+			<span>DODAJ DO KOSZYKA</span>
+		</button>
+	</body></html>`)
+	if !HasHebeAddToCartButton(body) {
+		t.Fatal("expected the main product add-to-cart button to mean in stock")
+	}
+}
+
+func TestHasHebeAddToCartButtonIgnoresRecommendation(t *testing.T) {
+	body := []byte(`<html><body>
+		<button class="recommendation-tile__add-to-cart" title="DODAJ DO KOSZYKA">DODAJ DO KOSZYKA</button>
+		<button class="add-product-detail js-add-to-cart-initial">Powiadom mnie</button>
+	</body></html>`)
+	if HasHebeAddToCartButton(body) {
+		t.Fatal("did not expect a recommendation button to mark the main product in stock")
+	}
+}
