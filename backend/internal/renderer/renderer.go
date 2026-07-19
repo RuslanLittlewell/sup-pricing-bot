@@ -18,6 +18,7 @@ import (
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
 	"github.com/littlewell/price-tracker/internal/scraper"
@@ -604,7 +605,12 @@ func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (st
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		acceptCookieBanners(),
 		simulateUserActivity(),
-		chromedp.Evaluate(script, &text),
+		// The polling script returns a Promise. Without AwaitPromise CDP returns
+		// the Promise object itself, which chromedp then tries (and fails) to
+		// unmarshal into the string above.
+		chromedp.Evaluate(script, &text, func(params *runtime.EvaluateParams) *runtime.EvaluateParams {
+			return params.WithAwaitPromise(true)
+		}),
 	); err != nil {
 		return "", err
 	}

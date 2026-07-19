@@ -218,6 +218,10 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 		if apiURL, apiErr := shops.WildberriesAPIURL(url); apiErr == nil {
 			fetchURL = apiURL
 		}
+	} else if extractor.RuleType(extractionRuleJSON) == "nike_size" {
+		if apiURL, apiErr := shops.NikeAvailabilityAPIURL(url); apiErr == nil {
+			fetchURL = apiURL
+		}
 	}
 	body, fetchMethod, err := fetcher.Fetch(fetchURL)
 	if err != nil {
@@ -386,6 +390,36 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 			currency = fallbackCurrency
 		}
 		return hebePrice.Current, currency, extractor.DetectStockStatusFromText(body), shops.HebePriceMethod, fetchMethod, nil
+	}
+	if shops.IsRossmannURL(url) {
+		body, fetchMethod, err := fetcher.Fetch(url)
+		if err != nil {
+			return 0, "", "", "", "", fmt.Errorf("fetch failed: %w", err)
+		}
+		rossmannPrice, err := shops.ParseRossmannPrice(body)
+		if err != nil {
+			return 0, "", "", "", "", err
+		}
+		currency := rossmannPrice.Currency
+		if currency == "" {
+			currency = fallbackCurrency
+		}
+		return rossmannPrice.Current, currency, "unknown", shops.RossmannPriceMethod, fetchMethod, nil
+	}
+	if shops.IsNikeURL(url) {
+		body, fetchMethod, err := fetcher.Fetch(url)
+		if err != nil {
+			return 0, "", "", "", "", fmt.Errorf("fetch failed: %w", err)
+		}
+		nikePrice, err := shops.ParseNikePrice(body, shops.NikeStyleColor(url))
+		if err != nil {
+			return 0, "", "", "", "", err
+		}
+		currency := nikePrice.Currency
+		if currency == "" {
+			currency = fallbackCurrency
+		}
+		return nikePrice.Current, currency, "unknown", shops.NikePriceMethod, fetchMethod, nil
 	}
 	if ruleType == "wildberries_price" || (ruleType == "" && shops.IsWildberriesURL(url)) {
 		apiURL, apiErr := shops.WildberriesAPIURL(url)

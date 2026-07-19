@@ -94,3 +94,15 @@ func TestDetectStockStatusWildberriesAPI(t *testing.T) {
 		t.Fatalf("got %s/%s", status, method)
 	}
 }
+
+func TestDetectStockStatusNikeSize(t *testing.T) {
+	rule := []byte(`{"type":"nike_size","size":"EU 42","gtin":"gtin-42"}`)
+	body := []byte(`{"objects":[{"gtin":"gtin-42","method":"SHIP","available":true}]}`)
+	status, method, err := DetectStockStatus(rule, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "in_stock" || method != "nike_inventory_api" {
+		t.Fatalf("got %s/%s", status, method)
+	}
+}

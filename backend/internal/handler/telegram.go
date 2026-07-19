@@ -324,12 +324,12 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			sendMainMenu(tg, chatID, lang, tr(lang, "menu_unknown_button"))
 			return
 		}
-		var selection zaraSizeSelectionState
+		var selection sizeSelectionState
 		if err := json.Unmarshal(state.Rule, &selection); err != nil || idx < 0 || idx >= len(selection.Variants) {
 			sendMainMenu(tg, chatID, lang, tr(lang, "menu_stale"))
 			return
 		}
-		createZaraSizeTracker(ctx, pool, tg, chatID, userID, lang, state.URL, state.Title, selection.FetchMethod, selection.Variants[idx], log)
+		createSizeTracker(ctx, pool, tg, chatID, userID, lang, state.URL, state.Title, selection, selection.Variants[idx], log)
 	case data == "candidate:yes":
 		state, ok := getTelegramState(ctx, pool, chatID)
 		if !ok || state.Step != "awaiting_confirm" {

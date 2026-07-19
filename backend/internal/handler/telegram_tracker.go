@@ -234,14 +234,26 @@ func startStockTracking(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Cl
 	if shops.IsZaraURL(url) && offerZaraSizeSelection(ctx, pool, tg, chatID, userID, lang, url, log, fetcher) {
 		return
 	}
+	if shops.IsNikeURL(url) {
+		offerNikeSizeSelection(ctx, pool, tg, chatID, userID, lang, url, log, fetcher)
+		return
+	}
 	createStockTrackerFromURL(ctx, pool, tg, chatID, userID, lang, url, log, fetcher)
 }
 
 // zaraSizeSelectionState is what offerZaraSizeSelection stashes in telegram_states.rule
 // while waiting for the user to pick a size (see the "size:" callback in telegram.go).
-type zaraSizeSelectionState struct {
-	FetchMethod string                  `json:"fetch_method"`
-	Variants    []shops.ZaraSizeVariant `json:"variants"`
+type sizeSelectionVariant struct {
+	Size string `json:"size"`
+	SKU  string `json:"sku,omitempty"`
+	GTIN string `json:"gtin,omitempty"`
+}
+
+type sizeSelectionState struct {
+	RuleType    string                 `json:"rule_type"`
+	StockMethod string                 `json:"stock_method"`
+	FetchMethod string                 `json:"fetch_method"`
+	Variants    []sizeSelectionVariant `json:"variants"`
 }
 
 // offerZaraSizeSelection shows a button per out-of-stock size and returns true, so the
@@ -263,10 +275,10 @@ func offerZaraSizeSelection(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		return false
 	}
 
-	var outOfStock []shops.ZaraSizeVariant
+	var outOfStock []sizeSelectionVariant
 	for _, v := range variants {
 		if !v.InStock {
-			outOfStock = append(outOfStock, v)
+			outOfStock = append(outOfStock, sizeSelectionVariant{Size: v.Size, SKU: v.SKU})
 		}
 	}
 	if len(outOfStock) == 0 {
@@ -277,7 +289,7 @@ func offerZaraSizeSelection(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	// createZaraSizeTracker can record how *this* lookup reached the page, once the user
 	// picks a size — a re-fetch at that point would risk a different, possibly stale
 	// answer, so we don't re-derive it there.
-	ruleJSON, err := json.Marshal(zaraSizeSelectionState{FetchMethod: fetchMethod, Variants: outOfStock})
+	ruleJSON, err := json.Marshal(sizeSelectionState{RuleType: "zara_size", StockMethod: "json_ld", FetchMethod: fetchMethod, Variants: outOfStock})
 	if err != nil {
 		log.Error().Err(err).Msg("failed to marshal zara size candidates")
 		return false
@@ -309,10 +321,86 @@ func offerZaraSizeSelection(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	return true
 }
 
+func offerNikeSizeSelection(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, fetcher *extractor.PageFetcher) bool {
+	SendTelegramMessage(tg, chatID, tr(lang, "stock_search_started"))
+	pageBody, _, err := fetcher.Fetch(url)
+	if err != nil {
+		log.Warn().Err(err).Str("url", url).Msg("Nike size lookup: page fetch failed")
+		SendTelegramMessage(tg, chatID, tr(lang, "size_lookup_failed"))
+		clearTelegramState(ctx, pool, chatID)
+		return true
+	}
+	apiURL, err := shops.NikeAvailabilityAPIURL(url)
+	if err != nil {
+		SendTelegramMessage(tg, chatID, tr(lang, "size_lookup_failed"))
+		clearTelegramState(ctx, pool, chatID)
+		return true
+	}
+	inventoryBody, fetchMethod, err := fetcher.Fetch(apiURL)
+	if err != nil {
+		log.Warn().Err(err).Str("url", url).Msg("Nike size lookup: inventory fetch failed")
+		SendTelegramMessage(tg, chatID, tr(lang, "size_lookup_failed"))
+		clearTelegramState(ctx, pool, chatID)
+		return true
+	}
+	variants, err := shops.ParseNikeSizes(pageBody, inventoryBody, shops.NikeStyleColor(url))
+	if err != nil {
+		log.Info().Err(err).Str("url", url).Msg("Nike size lookup: no size data found")
+		SendTelegramMessage(tg, chatID, tr(lang, "size_lookup_failed"))
+		clearTelegramState(ctx, pool, chatID)
+		return true
+	}
+
+	var outOfStock []sizeSelectionVariant
+	for _, v := range variants {
+		if !v.InStock {
+			outOfStock = append(outOfStock, sizeSelectionVariant{Size: v.Size, SKU: v.SKU, GTIN: v.GTIN})
+		}
+	}
+	if len(outOfStock) == 0 {
+		SendTelegramMessage(tg, chatID, tr(lang, "all_sizes_available"))
+		clearTelegramState(ctx, pool, chatID)
+		return true
+	}
+	ruleJSON, err := json.Marshal(sizeSelectionState{
+		RuleType: "nike_size", StockMethod: shops.NikeStockMethod,
+		FetchMethod: fetchMethod, Variants: outOfStock,
+	})
+	if err != nil {
+		SendTelegramMessage(tg, chatID, tr(lang, "size_lookup_failed"))
+		clearTelegramState(ctx, pool, chatID)
+		return true
+	}
+	result, _ := extractor.NewGeneric().Extract(pageBody, url)
+	title := ""
+	if result != nil {
+		title = result.Title
+	}
+	_, err = pool.Exec(ctx, `
+		INSERT INTO telegram_states (telegram_id, user_id, step, url, title, rule)
+		VALUES ($1, $2, 'awaiting_size', $3, $4, $5)
+		ON CONFLICT (telegram_id) DO UPDATE
+		SET user_id = $2, step = 'awaiting_size', url = $3, title = $4, rule = $5, updated_at = now()
+	`, chatID, userID, url, title, ruleJSON)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to save Nike size-selection state")
+		SendTelegramMessage(tg, chatID, tr(lang, "size_lookup_failed"))
+		clearTelegramState(ctx, pool, chatID)
+		return true
+	}
+	var rows [][]inlineButton
+	for i, v := range outOfStock {
+		rows = append(rows, []inlineButton{button(v.Size, fmt.Sprintf("size:%d", i))})
+	}
+	rows = append(rows, []inlineButton{button(tr(lang, "button_back"), "menu:back")})
+	_ = tg.SendMessageWithMarkup(chatID, tr(lang, "choose_size_prompt"), makeInlineKeyboard(rows...))
+	return true
+}
+
 // createZaraSizeTracker creates a stock tracker scoped to one size — extraction_rule
 // records which one ("zara_size" + size + sku) so the worker's recheck can look up that
 // exact variant's availability instead of the item's as a whole.
-func createZaraSizeTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, title, fetchMethod string, variant shops.ZaraSizeVariant, log zerolog.Logger) {
+func createSizeTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, title string, selection sizeSelectionState, variant sizeSelectionVariant, log zerolog.Logger) {
 	if !enforceTrackerLimit(ctx, pool, tg, chatID, userID, lang, log) {
 		clearTelegramState(ctx, pool, chatID)
 		return
@@ -321,7 +409,15 @@ func createZaraSizeTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram
 	if title == "" {
 		title = extractDomain(url)
 	}
-	rule, _ := json.Marshal(map[string]string{"type": "zara_size", "size": variant.Size, "sku": variant.SKU})
+	ruleType := selection.RuleType
+	if ruleType == "" {
+		ruleType = "zara_size"
+	}
+	stockMethod := selection.StockMethod
+	if stockMethod == "" {
+		stockMethod = "json_ld"
+	}
+	rule, _ := json.Marshal(map[string]string{"type": ruleType, "size": variant.Size, "sku": variant.SKU, "gtin": variant.GTIN})
 	const stockStatus = "out_of_stock" // only out-of-stock sizes are ever offered
 
 	var trackerID string
@@ -331,7 +427,7 @@ func createZaraSizeTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram
 		RETURNING id
 	`, userID, url, extractDomain(url), title, stockStatus, rule).Scan(&trackerID)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to create zara size tracker")
+		log.Error().Err(err).Msg("failed to create size tracker")
 		SendTelegramMessage(tg, chatID, tr(lang, "tracker_create_failed"))
 		clearTelegramState(ctx, pool, chatID)
 		return
@@ -342,12 +438,13 @@ func createZaraSizeTracker(ctx context.Context, pool *pgxpool.Pool, tg *telegram
 		Str("tracker_id", trackerID).
 		Str("url", url).
 		Str("size", variant.Size).
-		Msg("telegram zara size tracker created")
+		Str("rule_type", ruleType).
+		Msg("telegram size tracker created")
 
 	pool.Exec(ctx, `
 		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method, fetch_method)
-		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success', 'json_ld', $3)
-	`, trackerID, stockStatus, fetchMethod)
+		VALUES (gen_random_uuid(), $1, $2, 'bot_add', 'success', $3, $4)
+	`, trackerID, stockStatus, stockMethod, selection.FetchMethod)
 
 	clearTelegramState(ctx, pool, chatID)
 	markup := makeInlineKeyboard(

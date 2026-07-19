@@ -88,6 +88,8 @@ tar \
   --exclude='.env.*' \
   --exclude='frontend/node_modules' \
   --exclude='frontend/dist' \
+	--exclude='admin/node_modules' \
+	--exclude='admin/dist' \
   --exclude='backend/tmp' \
   --exclude='*.log' \
   -C "$PROJECT_ROOT" \
