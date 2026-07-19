@@ -50,6 +50,28 @@ func (e *GenericExtractor) Extract(htmlContent []byte, url string) (*ExtractionR
 			}
 		}
 	}
+	if shops.IsRossmannURL(url) {
+		if rossmannPrice, rossmannErr := shops.ParseRossmannPrice(htmlContent); rossmannErr == nil {
+			rule, _ := json.Marshal(map[string]string{"type": shops.RossmannPriceMethod, "field": `data-testid="product-price"`, "verified_by": "json_ld"})
+			result.Candidates = append(result.Candidates, PriceCandidate{
+				Price: fmt.Sprintf("%.2f", rossmannPrice.Current), Currency: rossmannPrice.Currency,
+				Confidence: 1, Label: "Rossmann product price verified by JSON-LD", Rule: rule,
+			})
+		}
+	}
+	if shops.IsNikeURL(url) {
+		if nikePrice, nikeErr := shops.ParseNikePrice(htmlContent, shops.NikeStyleColor(url)); nikeErr == nil {
+			rule, _ := json.Marshal(map[string]string{"type": shops.NikePriceMethod, "field": "prices.currentPrice", "style_color": shops.NikeStyleColor(url)})
+			result.Candidates = append(result.Candidates, PriceCandidate{
+				Price: fmt.Sprintf("%.2f", nikePrice.Current), Currency: nikePrice.Currency,
+				Confidence: 1, Label: "Nike selected style price", Rule: rule,
+			})
+			if nikePrice.Initial > nikePrice.Current {
+				result.RegularPrice = fmt.Sprintf("%.2f", nikePrice.Initial)
+				result.DiscountPercent = nikePrice.DiscountPercent
+			}
+		}
+	}
 
 	if ld := extractJSONLD(doc); ld != nil {
 		result.Title = ld.Name

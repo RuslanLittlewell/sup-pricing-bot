@@ -89,6 +89,7 @@ type StockRule struct {
 	Type    string `json:"type"`
 	Size    string `json:"size"`
 	SKU     string `json:"sku"`
+	GTIN    string `json:"gtin"`
 	Article string `json:"article"`
 }
 
@@ -127,6 +128,16 @@ func DetectStockStatus(extractionRuleJSON []byte, body []byte) (status, method s
 				return "in_stock", "wildberries_api", nil
 			}
 			return "out_of_stock", "wildberries_api", nil
+		}
+		if jsonErr := json.Unmarshal(extractionRuleJSON, &rule); jsonErr == nil && rule.Type == "nike_size" {
+			available, nikeErr := shops.ParseNikeGTINAvailability(body, rule.GTIN)
+			if nikeErr != nil {
+				return "", "", fmt.Errorf("Nike size lookup failed: %w", nikeErr)
+			}
+			if available {
+				return "in_stock", shops.NikeStockMethod, nil
+			}
+			return "out_of_stock", shops.NikeStockMethod, nil
 		}
 	}
 	status = DetectStockStatusFromText(body)
