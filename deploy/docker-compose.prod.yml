@@ -52,11 +52,39 @@ services:
     # Private JSON metasearch API. No host port is published; only backend and worker
     # can reach it over the Compose network.
 
+  curl-cffi:
+    build:
+      context: ../curl-cffi-relay
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Private TLS/HTTP2 browser-impersonation relay with target-side SSRF checks.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  firefox-renderer:
+    build:
+      context: ../firefox-relay
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    shm_size: "512mb"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
   backend:
     build:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    init: true
     env_file: ../.env.production
     extra_hosts:
       - "vpn.littlewell-app.work:host-gateway"
@@ -72,9 +100,14 @@ services:
       SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
       SCRAPER_PROFILE_DIR: /var/lib/pricebot/browser-profiles
       RENDERER_PROFILE_NAMESPACE: backend
+      SCRAPER_EXTENSION_DIR: ${SCRAPER_EXTENSION_DIR:-/opt/extensions/antibot-detector}
+      SCRAPER_PERSISTENT_BROWSER: ${SCRAPER_PERSISTENT_BROWSER:-true}
+      SCRAPER_MAX_BROWSER_SESSIONS: ${SCRAPER_MAX_BROWSER_SESSIONS:-4}
       SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
       CF_RELAY_URL: ${CF_RELAY_URL:-}
       CF_RELAY_TOKEN: ${CF_RELAY_TOKEN:-}
+      CURL_CFFI_URL: http://curl-cffi:8080
+      FIREFOX_RENDERER_URL: http://firefox-renderer:8080
       OPEN_SERP_BASE_URL: http://openserp:7000
       OPEN_SERP_ENGINES: ${OPEN_SERP_ENGINES:-google,bing,duckduckgo}
       OPEN_SERP_API_KEY: ${OPEN_SERP_API_KEY:-}
@@ -98,6 +131,10 @@ services:
         condition: service_started
       searxng:
         condition: service_started
+      curl-cffi:
+        condition: service_healthy
+      firefox-renderer:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
       interval: 30s
@@ -110,6 +147,7 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    init: true
     command: ["worker"]
     env_file: ../.env.production
     extra_hosts:
@@ -122,9 +160,14 @@ services:
       SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
       SCRAPER_PROFILE_DIR: /var/lib/pricebot/browser-profiles
       RENDERER_PROFILE_NAMESPACE: worker
+      SCRAPER_EXTENSION_DIR: ${SCRAPER_EXTENSION_DIR:-/opt/extensions/antibot-detector}
+      SCRAPER_PERSISTENT_BROWSER: ${SCRAPER_PERSISTENT_BROWSER:-true}
+      SCRAPER_MAX_BROWSER_SESSIONS: ${SCRAPER_MAX_BROWSER_SESSIONS:-4}
       SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
       CF_RELAY_URL: ${CF_RELAY_URL:-}
       CF_RELAY_TOKEN: ${CF_RELAY_TOKEN:-}
+      CURL_CFFI_URL: http://curl-cffi:8080
+      FIREFOX_RENDERER_URL: http://firefox-renderer:8080
       OPEN_SERP_BASE_URL: http://openserp:7000
       OPEN_SERP_ENGINES: ${OPEN_SERP_ENGINES:-google,bing,duckduckgo}
       OPEN_SERP_API_KEY: ${OPEN_SERP_API_KEY:-}
@@ -144,6 +187,10 @@ services:
         condition: service_started
       searxng:
         condition: service_started
+      curl-cffi:
+        condition: service_healthy
+      firefox-renderer:
+        condition: service_healthy
 
   frontend:
     build:

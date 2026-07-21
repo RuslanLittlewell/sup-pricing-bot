@@ -37,8 +37,7 @@ type Profile struct {
 // them have known Client Hints to accompany them, so a real gist import would've made the
 // mask worse, not better. Generating a larger current, internally-consistent set instead.
 var chromeVersions = []string{
-	"124.0.0.0", "125.0.0.0", "126.0.0.0", "127.0.0.0",
-	"128.0.0.0", "129.0.0.0", "130.0.0.0", "131.0.0.0",
+	"146.0.0.0", "147.0.0.0", "148.0.0.0", "149.0.0.0",
 }
 
 type osTarget struct {

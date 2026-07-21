@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,16 @@ type Renderer struct {
 	profileRoot   string
 	profileMu     sync.Mutex
 	profileLocks  map[string]*sync.Mutex
+	extensionDir  string
+	persistent    bool
+	maxSessions   int
+	sessions      map[string]*browserSession
+}
+
+type browserSession struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	lastUsed time.Time
 }
 
 type PriceBlockCandidate struct {
@@ -47,6 +58,15 @@ type PriceBlockCandidate struct {
 	PriceTokenIndex    int    `json:"price_token_index"`
 	Title              string `json:"title"`
 	TotalFound         int    `json:"total_found"`
+}
+
+// BrowserDiagnostics exposes only non-sensitive browser state. Cookie values and
+// captured request payloads are deliberately never returned to the admin API.
+type BrowserDiagnostics struct {
+	PersistentBrowser bool     `json:"persistentBrowser"`
+	ExtensionEnabled  bool     `json:"extensionEnabled"`
+	ExtensionLoaded   bool     `json:"extensionLoaded"`
+	AkamaiCookies     []string `json:"akamaiCookies"`
 }
 
 func New(cookiesFile, proxyURL string) (*Renderer, error) {
@@ -66,15 +86,30 @@ func New(cookiesFile, proxyURL string) (*Renderer, error) {
 	if err := os.MkdirAll(profileRoot, 0700); err != nil {
 		return nil, fmt.Errorf("create browser profile directory: %w", err)
 	}
+	maxSessions := 4
+	if raw := os.Getenv("SCRAPER_MAX_BROWSER_SESSIONS"); raw != "" {
+		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil && parsed > 0 {
+			maxSessions = parsed
+		}
+	}
 	rootCtx, cancel := context.WithCancel(context.Background())
-	return &Renderer{rootCtx: rootCtx, cancel: cancel, cookies: cookies, proxyServer: proxyServer, proxyUser: proxyUser, proxyPassword: proxyPassword, profileRoot: profileRoot, profileLocks: map[string]*sync.Mutex{}}, nil
+	return &Renderer{
+		rootCtx: rootCtx, cancel: cancel, cookies: cookies,
+		proxyServer: proxyServer, proxyUser: proxyUser, proxyPassword: proxyPassword,
+		profileRoot: profileRoot, profileLocks: map[string]*sync.Mutex{},
+		extensionDir: os.Getenv("SCRAPER_EXTENSION_DIR"),
+		persistent:   strings.EqualFold(os.Getenv("SCRAPER_PERSISTENT_BROWSER"), "true"),
+		maxSessions:  maxSessions,
+		sessions:     map[string]*browserSession{},
+	}, nil
 }
 
-func (r *Renderer) allocatorOptions(profileDir string) []chromedp.ExecAllocatorOption {
+func (r *Renderer) allocatorOptions(profileDir string, loadExtension bool) []chromedp.ExecAllocatorOption {
+	headless := !loadExtension
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath("/usr/bin/chromium"),
 		chromedp.UserDataDir(profileDir),
-		chromedp.Flag("headless", true),
+		chromedp.Flag("headless", headless),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
@@ -86,6 +121,15 @@ func (r *Renderer) allocatorOptions(profileDir string) []chromedp.ExecAllocatorO
 		chromedp.Flag("lang", "pl-PL"),
 		chromedp.UserAgent(useragent.Random().UserAgent),
 	)
+	if loadExtension {
+		opts = append(opts,
+			// chromedp's defaults disable every extension. A false boolean removes
+			// that switch while keeping all other safe allocator defaults.
+			chromedp.Flag("disable-extensions", false),
+			chromedp.Flag("disable-extensions-except", r.extensionDir),
+			chromedp.Flag("load-extension", r.extensionDir),
+		)
+	}
 	if r.proxyServer != "" {
 		opts = append(opts, chromedp.ProxyServer(r.proxyServer))
 	}
@@ -94,6 +138,12 @@ func (r *Renderer) allocatorOptions(profileDir string) []chromedp.ExecAllocatorO
 }
 
 func (r *Renderer) Close() {
+	r.profileMu.Lock()
+	for key, session := range r.sessions {
+		session.cancel()
+		delete(r.sessions, key)
+	}
+	r.profileMu.Unlock()
 	if r.cancel != nil {
 		r.cancel()
 	}
@@ -107,6 +157,8 @@ func (r *Renderer) newProfileContext(rawURL string) (context.Context, context.Ca
 		return nil, nil, fmt.Errorf("invalid profile URL")
 	}
 	key := unsafeProfileChar.ReplaceAllString(parsed.Hostname(), "_")
+	legacy := usesLegacyRenderer(parsed.Hostname())
+	persistent := r.persistent && !legacy
 	r.profileMu.Lock()
 	lock := r.profileLocks[key]
 	if lock == nil {
@@ -116,6 +168,12 @@ func (r *Renderer) newProfileContext(rawURL string) (context.Context, context.Ca
 	r.profileMu.Unlock()
 	lock.Lock()
 	profileDir := filepath.Join(r.profileRoot, key)
+	if legacy {
+		// Keep Zara's headless fingerprint isolated from profiles previously opened by
+		// headed Chromium with the diagnostic extension. Reusing those cookies with a
+		// different browser fingerprint is itself a strong anti-bot inconsistency.
+		profileDir = filepath.Join(r.profileRoot, "legacy", key)
+	}
 	if err := os.MkdirAll(profileDir, 0700); err != nil {
 		lock.Unlock()
 		return nil, nil, err
@@ -125,8 +183,47 @@ func (r *Renderer) newProfileContext(rawURL string) (context.Context, context.Ca
 	for _, name := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
 		_ = os.Remove(filepath.Join(profileDir, name))
 	}
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(r.rootCtx, r.allocatorOptions(profileDir)...)
+	if persistent {
+		r.profileMu.Lock()
+		if session := r.sessions[key]; session != nil {
+			if session.ctx.Err() == nil {
+				session.lastUsed = time.Now()
+				r.profileMu.Unlock()
+				return session.ctx, lock.Unlock, nil
+			}
+			// Chromium may exit independently (crash, process kill, failed startup). Its
+			// context remains in the session map unless we explicitly evict it, causing
+			// every later render for this domain to fail immediately with context canceled.
+			session.cancel()
+			delete(r.sessions, key)
+		}
+		r.profileMu.Unlock()
+	}
+
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(r.rootCtx, r.allocatorOptions(profileDir, r.extensionDir != "" && !legacy)...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	if persistent {
+		r.profileMu.Lock()
+		if len(r.sessions) >= r.maxSessions {
+			var oldestKey string
+			var oldestTime time.Time
+			for sessionKey, session := range r.sessions {
+				if oldestKey == "" || session.lastUsed.Before(oldestTime) {
+					oldestKey, oldestTime = sessionKey, session.lastUsed
+				}
+			}
+			if oldest := r.sessions[oldestKey]; oldest != nil {
+				oldest.cancel()
+				delete(r.sessions, oldestKey)
+			}
+		}
+		r.sessions[key] = &browserSession{ctx: browserCtx, cancel: func() {
+			cancelBrowser()
+			cancelAlloc()
+		}, lastUsed: time.Now()}
+		r.profileMu.Unlock()
+		return browserCtx, lock.Unlock, nil
+	}
 	cancel := func() {
 		closeCtx, closeCancel := context.WithTimeout(browserCtx, 3*time.Second)
 		_ = chromedp.Cancel(closeCtx)
@@ -138,14 +235,19 @@ func (r *Renderer) newProfileContext(rawURL string) (context.Context, context.Ca
 	return browserCtx, cancel, nil
 }
 
+func usesLegacyRenderer(hostname string) bool {
+	host := strings.ToLower(strings.TrimSuffix(hostname, "."))
+	return host == "zara.com" || strings.HasSuffix(host, ".zara.com")
+}
+
 func (r *Renderer) Render(ctx context.Context, url string, waitTime time.Duration) (string, error) {
-	ctx, cancel, err := r.newProfileContext(url)
+	browserCtx, release, err := r.newProfileContext(url)
 	if err != nil {
 		return "", err
 	}
-	defer cancel()
+	defer release()
 
-	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(browserCtx, 30*time.Second)
 	defer cancel()
 
 	var html string
@@ -162,11 +264,99 @@ func (r *Renderer) Render(ctx context.Context, url string, waitTime time.Duratio
 	}
 
 	if err := chromedp.Run(ctx, tasks...); err != nil {
+		// A canceled parent means the persistent browser itself is gone. Do not cache
+		// the poisoned session: the next tracker run must start a fresh Chromium.
+		if errors.Is(browserCtx.Err(), context.Canceled) {
+			r.evictSession(url, browserCtx)
+		}
 		return "", err
 	}
 	_ = r.saveProfileCookies(ctx, url)
 
 	return html, nil
+}
+
+func (r *Renderer) evictSession(rawURL string, expected context.Context) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return
+	}
+	key := unsafeProfileChar.ReplaceAllString(parsed.Hostname(), "_")
+	r.profileMu.Lock()
+	defer r.profileMu.Unlock()
+	if session := r.sessions[key]; session != nil && session.ctx == expected {
+		session.cancel()
+		delete(r.sessions, key)
+	}
+}
+
+// Diagnostics inspects the persistent browser after a render. It is intentionally
+// best-effort: a challenge page can time out while still leaving useful targets and
+// cookies behind for troubleshooting.
+func (r *Renderer) Diagnostics(rawURL string) (*BrowserDiagnostics, error) {
+	ctx, release, err := r.newProfileContext(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out := &BrowserDiagnostics{
+		PersistentBrowser: r.persistent,
+		ExtensionEnabled:  r.extensionDir != "",
+		AkamaiCookies:     []string{},
+	}
+	if targets, targetErr := chromedp.Targets(ctx); targetErr == nil {
+		for _, target := range targets {
+			if strings.HasPrefix(target.URL, "chrome-extension://") {
+				out.ExtensionLoaded = true
+				break
+			}
+		}
+	}
+	if !out.ExtensionLoaded && r.extensionDir != "" {
+		parsed, _ := url.Parse(rawURL)
+		key := unsafeProfileChar.ReplaceAllString(parsed.Hostname(), "_")
+		out.ExtensionLoaded = extensionStarted(filepath.Join(r.profileRoot, key), r.extensionDir)
+	}
+	cookies, cookieErr := network.GetCookies().WithURLs([]string{rawURL}).Do(ctx)
+	if cookieErr != nil {
+		return out, nil
+	}
+	wanted := map[string]bool{"_abck": true, "ak_bmsc": true, "bm_sz": true, "bm_s": true, "bm_so": true, "bm_lso": true}
+	for _, cookie := range cookies {
+		if wanted[cookie.Name] {
+			out.AkamaiCookies = append(out.AkamaiCookies, cookie.Name)
+		}
+	}
+	return out, nil
+}
+
+func extensionStarted(profileDir, extensionDir string) bool {
+	data, err := os.ReadFile(filepath.Join(profileDir, "Default", "Preferences"))
+	if err != nil {
+		return false
+	}
+	var prefs struct {
+		Extensions struct {
+			Settings map[string]struct {
+				Path                    string            `json:"path"`
+				DisableReasons          []json.RawMessage `json:"disable_reasons"`
+				HasStartedServiceWorker bool              `json:"has_started_service_worker"`
+			} `json:"settings"`
+		} `json:"extensions"`
+	}
+	if json.Unmarshal(data, &prefs) != nil {
+		return false
+	}
+	wanted := filepath.Clean(extensionDir)
+	for _, extension := range prefs.Extensions.Settings {
+		if filepath.Clean(extension.Path) == wanted && len(extension.DisableReasons) == 0 && extension.HasStartedServiceWorker {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index int) (*PriceBlockCandidate, []byte, error) {

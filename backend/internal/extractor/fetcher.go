@@ -37,9 +37,11 @@ var errBotBlocked = errors.New("page is blocked by anti-bot protection")
 // extraction_method in price_points/stock_points so the admin dashboard can show, e.g.,
 // "parsed via json_ld, fetched via cf_relay" instead of leaving fetch strategy invisible.
 const (
-	FetchMethodDirect  = "direct"
-	FetchMethodCFRelay = "cf_relay"
-	FetchMethodRender  = "render"
+	FetchMethodDirect   = "direct"
+	FetchMethodCurlCFFI = "curl_cffi"
+	FetchMethodCFRelay  = "cf_relay"
+	FetchMethodRender   = "render"
+	FetchMethodFirefox  = "firefox"
 )
 
 type PageFetcher struct {
@@ -47,7 +49,10 @@ type PageFetcher struct {
 	renderer   *renderer.Renderer
 	cookies    []scraper.Cookie
 	cfRelay    *CloudflareRelayFetcher
+	curlCFFI   *CurlCFFIFetcher
+	firefox    *FirefoxFetcher
 	proxies    *proxypool.Store
+	proxyURL   string
 }
 
 // NewPageFetcher builds a fetcher. proxies may be nil (no pool wired up) — direct fetches
@@ -80,7 +85,10 @@ func NewPageFetcher(r *renderer.Renderer, cookiesFile, proxyURL string, proxies 
 		renderer: r,
 		cookies:  cookies,
 		cfRelay:  NewCloudflareRelay(),
+		curlCFFI: NewCurlCFFI(),
+		firefox:  NewFirefox(),
 		proxies:  proxies,
+		proxyURL: proxyURL,
 	}
 }
 
@@ -90,6 +98,13 @@ func NewPageFetcher(r *renderer.Renderer, cookiesFile, proxyURL string, proxies 
 func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 	if err := security.ValidateURL(url); err != nil {
 		return nil, "", fmt.Errorf("url validation failed: %w", err)
+	}
+	// Zara historically worked through a browser renderer but currently rejects the
+	// Chromium fingerprint. Try an isolated Firefox engine before the shared HTTP chain.
+	if isZaraURL(url) && f.firefox != nil {
+		if body, firefoxErr := f.fetchViaFirefox(url); firefoxErr == nil {
+			return body, FetchMethodFirefox, nil
+		}
 	}
 
 	if f.renderer != nil && shouldRenderFirst(url) {
@@ -103,6 +118,9 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 	if err != nil {
 		if !shouldRenderFallback(err) {
 			return nil, "", err
+		}
+		if impersonated, impersonateErr := f.fetchViaCurlCFFI(url); impersonateErr == nil {
+			return impersonated, FetchMethodCurlCFFI, nil
 		}
 		if relayed, relayErr := f.fetchViaRelay(url); relayErr == nil {
 			return relayed, FetchMethodCFRelay, nil
@@ -121,6 +139,9 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 	}
 
 	if isBotChallenge(body) {
+		if impersonated, impersonateErr := f.fetchViaCurlCFFI(url); impersonateErr == nil {
+			return impersonated, FetchMethodCurlCFFI, nil
+		}
 		if relayed, relayErr := f.fetchViaRelay(url); relayErr == nil {
 			return relayed, FetchMethodCFRelay, nil
 		}
@@ -141,6 +162,60 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 		_ = f.proxies.SaveFingerprint(context.Background(), url, fp)
 	}
 	return body, FetchMethodDirect, nil
+}
+
+func isZaraURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	return host == "zara.com" || strings.HasSuffix(host, ".zara.com")
+}
+
+func (f *PageFetcher) fetchViaFirefox(targetURL string) ([]byte, error) {
+	proxyURL := f.proxyURL
+	if f.proxies != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		picked, ok := f.proxies.PickResidentialForURL(ctx, targetURL)
+		cancel()
+		if ok {
+			proxyURL = picked.HTTPURL()
+		}
+	}
+	headers := map[string]string{
+		"Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+		"Cache-Control":   "no-cache",
+	}
+	if cookieHeader := scraper.HeaderForURL(f.cookies, targetURL); cookieHeader != "" {
+		headers["Cookie"] = cookieHeader
+	}
+	return f.firefox.Fetch(targetURL, proxyURL, headers)
+}
+
+func (f *PageFetcher) fetchViaCurlCFFI(targetURL string) ([]byte, error) {
+	if f.curlCFFI == nil {
+		return nil, fmt.Errorf("curl-cffi relay not configured")
+	}
+	proxyURL := ""
+	if f.proxies != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		picked, ok := f.proxies.PickResidentialForURL(ctx, targetURL)
+		cancel()
+		if ok {
+			proxyURL = picked.HTTPURL()
+		}
+	}
+	headers := map[string]string{
+		"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+		"Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+		"Cache-Control":   "no-cache",
+		"Pragma":          "no-cache",
+	}
+	if cookieHeader := scraper.HeaderForURL(f.cookies, targetURL); cookieHeader != "" {
+		headers["Cookie"] = cookieHeader
+	}
+	return f.curlCFFI.Fetch(targetURL, proxyURL, headers)
 }
 
 // fetchDirect tries the (User-Agent, proxy) pairing that last worked for this exact URL
@@ -306,6 +381,7 @@ func (f *PageFetcher) httpFetch(url string, forced *proxypool.FetchFingerprint, 
 
 func isBotChallenge(body []byte) bool {
 	s := string(body)
+	lower := strings.ToLower(s)
 	indicators := []string{
 		`/_sec/verify`,
 		`bm-verify`,
@@ -333,6 +409,13 @@ func isBotChallenge(body []byte) bool {
 		if strings.Contains(s, ind) {
 			return true
 		}
+	}
+	// Some Akamai configurations intentionally return HTTP 200 for their deny page.
+	// Adidas currently serves this variant, so status-code checks alone cannot distinguish
+	// it from a product page.
+	if strings.Contains(lower, "access denied") &&
+		(strings.Contains(lower, "reference #") || strings.Contains(lower, "errors.edgesuite.net")) {
+		return true
 	}
 	return false
 }
