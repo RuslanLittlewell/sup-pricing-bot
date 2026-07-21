@@ -13,14 +13,15 @@ import (
 )
 
 type playgroundResponse struct {
-	Tool        string                      `json:"tool"`
-	URL         string                      `json:"url"`
-	DurationMS  int64                       `json:"durationMs"`
-	FetchMethod string                      `json:"fetchMethod,omitempty"`
-	BodyBytes   int                         `json:"bodyBytes,omitempty"`
-	StockStatus string                      `json:"stockStatus,omitempty"`
-	Result      *extractor.ExtractionResult `json:"result,omitempty"`
-	Error       string                      `json:"error,omitempty"`
+	Tool        string                       `json:"tool"`
+	URL         string                       `json:"url"`
+	DurationMS  int64                        `json:"durationMs"`
+	FetchMethod string                       `json:"fetchMethod,omitempty"`
+	BodyBytes   int                          `json:"bodyBytes,omitempty"`
+	StockStatus string                       `json:"stockStatus,omitempty"`
+	Browser     *renderer.BrowserDiagnostics `json:"browser,omitempty"`
+	Result      *extractor.ExtractionResult  `json:"result,omitempty"`
+	Error       string                       `json:"error,omitempty"`
 }
 
 // AdminPlayground runs one explicitly selected extraction tier without creating or
@@ -58,6 +59,7 @@ func AdminPlayground(pool *pgxpool.Pool, rend *renderer.Renderer, fetcher *extra
 			body, err = rend.Render(r.Context(), req.URL, 4*time.Second)
 			out.FetchMethod = extractor.FetchMethodRender
 			out.BodyBytes = len(body)
+			out.Browser, _ = rend.Diagnostics(req.URL)
 		case "attribute", "generic":
 			var body []byte
 			body, out.FetchMethod, err = fetcher.Fetch(req.URL)
