@@ -101,12 +101,29 @@ type StockRule struct {
 // the tracker's *rule type* (which variant to watch), not the parsing method — mirrors
 // extraction_method on price_points so the admin dashboard can show it the same way for
 // stock trackers. Shared by the worker's periodic recheck and the bot's manual /check.
+// A "zara_size" tracker can also report "keyword_scan": when the product is fully
+// sold out, Zara omits the hasVariant JSON-LD block entirely (no size picker to render),
+// so we fall back to the same phrase scan the generic path uses.
 func DetectStockStatus(extractionRuleJSON []byte, body []byte) (status, method string, err error) {
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
 		var rule StockRule
 		if jsonErr := json.Unmarshal(extractionRuleJSON, &rule); jsonErr == nil && rule.Type == "zara_size" {
 			variants, zerr := shops.ParseZaraSizes(body)
 			if zerr != nil {
+				// A fully sold-out Zara product renders no size picker at all: there's
+				// nothing to pick from, so the ProductGroup/hasVariant JSON-LD block
+				// ParseZaraSizes looks for is simply absent, and the page shows a
+				// disabled button (zds-button__second-line) reading "out of stock" in
+				// the page's locale instead. That's a confident, positive stock signal —
+				// not a parse failure — so check the generic out-of-stock phrase list
+				// (outOfStockPhrases already covers Polish/Russian/English wording, e.g.
+				// "нет в наличии") before giving up. Only fall through to the error when
+				// the page doesn't confirm out-of-stock either: defaulting an unreadable
+				// page to "in_stock" is exactly what produced spurious "back in stock"
+				// notifications elsewhere (see DetectStockStatusFromText).
+				if DetectStockStatusFromText(body) == "out_of_stock" {
+					return "out_of_stock", "keyword_scan", nil
+				}
 				return "", "", fmt.Errorf("zara size lookup failed: %w", zerr)
 			}
 			for _, v := range variants {

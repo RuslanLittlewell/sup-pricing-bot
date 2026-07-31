@@ -83,6 +83,39 @@ func TestDetectStockStatusZaraSizeNoLongerListed(t *testing.T) {
 	}
 }
 
+func TestDetectStockStatusZaraSizeFullySoldOut(t *testing.T) {
+	// When a Zara product is fully sold out, the page renders no size picker at all — no
+	// ProductGroup/hasVariant JSON-LD — just a disabled button whose text says "out of
+	// stock" in the page's locale (e.g. the zds-button__second-line span reading "НЕТ В
+	// НАЛИЧИИ"). ParseZaraSizes can't find variant data, but that's a genuine out-of-stock
+	// signal, not an extraction failure, so DetectStockStatus must resolve it rather than
+	// erroring out (which previously drove the tracker to "needs_confirmation" after a few
+	// consecutive checks instead of ever reporting the size as unavailable).
+	rule := []byte(`{"type":"zara_size","size":"M","sku":"1-3"}`)
+	body := []byte(`<html><body>` + strings.Repeat("Kurtka bomberka ", 40) +
+		`<button><span class="zds-button__second-line">НЕТ В НАЛИЧИИ</span></button></body></html>`)
+
+	status, method, err := DetectStockStatus(rule, body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != "out_of_stock" || method != "keyword_scan" {
+		t.Fatalf("expected out_of_stock/keyword_scan, got %s/%s", status, method)
+	}
+}
+
+func TestDetectStockStatusZaraSizeUnreadablePageStillErrors(t *testing.T) {
+	// No variant JSON-LD AND no recognizable out-of-stock phrase (e.g. a broken/partial
+	// render) must still surface as an error, not default to in_stock — same reasoning as
+	// TestDetectStockStatusEmptyBodyErrors.
+	rule := []byte(`{"type":"zara_size","size":"M","sku":"1-3"}`)
+	body := []byte(`<html><body>` + strings.Repeat("Kurtka bomberka ", 40) + `</body></html>`)
+
+	if _, _, err := DetectStockStatus(rule, body); err == nil {
+		t.Fatal("expected an error when neither variant data nor an out-of-stock phrase is present")
+	}
+}
+
 func TestDetectStockStatusWildberriesAPI(t *testing.T) {
 	rule := []byte(`{"type":"wildberries_stock","article":"264041181"}`)
 	body := []byte(`{"products":[{"id":264041181,"name":"Product","sizes":[{"stocks":[{"qty":2}],"price":{"product":10000,"logistics":500}}]}]}`)
