@@ -59,6 +59,7 @@ type adminUserTracker struct {
 }
 
 type adminFallbackTracker struct {
+	ID        string `json:"id"`
 	UserID    string `json:"userId"`
 	UserName  string `json:"userName"`
 	Title     string `json:"title"`
@@ -662,7 +663,7 @@ func loadAdminTrackers(ctx context.Context, pool *pgxpool.Pool) (*adminTrackersR
 
 	fallbackRows, err := pool.Query(ctx, `
 		SELECT DISTINCT ON (t.id)
-			u.id, COALESCE(NULLIF(u.name, ''), u.email),
+			t.id::text, u.id, COALESCE(NULLIF(u.name, ''), u.email),
 			COALESCE(t.title, t.domain), t.url, pp.extraction_method, pp.checked_at::text
 		FROM price_points pp
 		JOIN trackers t ON t.id = pp.tracker_id
@@ -676,7 +677,7 @@ func loadAdminTrackers(ctx context.Context, pool *pgxpool.Pool) (*adminTrackersR
 	defer fallbackRows.Close()
 	for fallbackRows.Next() {
 		var f adminFallbackTracker
-		if err := fallbackRows.Scan(&f.UserID, &f.UserName, &f.Title, &f.URL, &f.Method, &f.Timestamp); err != nil {
+		if err := fallbackRows.Scan(&f.ID, &f.UserID, &f.UserName, &f.Title, &f.URL, &f.Method, &f.Timestamp); err != nil {
 			return nil, err
 		}
 		resp.FallbackTrackers = append(resp.FallbackTrackers, f)

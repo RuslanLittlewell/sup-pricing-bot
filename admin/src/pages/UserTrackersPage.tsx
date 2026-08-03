@@ -130,6 +130,7 @@ export function UserTrackersPage({
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>ID</TableHead>
                   <TableHead>Product</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Availability</TableHead>
@@ -142,13 +143,14 @@ export function UserTrackersPage({
               <TableBody>
                 {trackers.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-muted-foreground">
+                    <TableCell colSpan={8} className="text-muted-foreground">
                       No trackers for this user.
                     </TableCell>
                   </TableRow>
                 ) : (
                   trackers.map((t) => (
                     <TableRow key={t.id}>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{t.id}</TableCell>
                       <TableCell>
                         <div className="flex max-w-[24rem] flex-col gap-1 whitespace-normal">
                           <a

@@ -19,6 +19,29 @@ func TestGenericExtractsHebePromotionalPriceBeforeJSONLDRegularPrice(t *testing.
 	}
 }
 
+// WooCommerce's default Product schema nests the price under
+// offers.priceSpecification.price rather than offers.price directly, and pages
+// like supermaluch.com additionally emit a second, Yoast-style block wrapping the
+// real product in a top-level "@graph" array. The extractor must not give up after
+// the first script tag if it lacks a usable price — it should keep looking (and
+// fall back to priceSpecification.price) until it finds one.
+func TestGenericHandlesGraphWrappedJSONLDAndPriceSpecificationFallback(t *testing.T) {
+	body := []byte(`<html><body>
+<script type="application/ld+json">{"@context":"https://schema.org/","@type":"Product","name":"Wozek","offers":{"@type":"Offer","priceCurrency":"PLN","availability":"http://schema.org/InStock","priceSpecification":{"@type":"PriceSpecification","price":5099,"priceCurrency":"PLN"}}}</script>
+<script type="application/ld+json">{"@context":"https://schema.org/","@graph":[{"@type":"BreadcrumbList"},{"@context":"https://schema.org/","@type":"Product","name":"Wozek","offers":[{"@type":"Offer","price":"5099.00","priceCurrency":"PLN","availability":"https://schema.org/InStock"}]}]}</script>
+</body></html>`)
+	result, err := NewGeneric().Extract(body, "https://www.supermaluch.com/produkt/wozek/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Candidates) != 1 || result.Candidates[0].Price != "5099.00" || RuleType(result.Candidates[0].Rule) != "json_ld" {
+		t.Fatalf("expected a single JSON-LD price candidate of 5099.00, got %+v", result.Candidates)
+	}
+	if result.Candidates[0].Currency != "PLN" {
+		t.Fatalf("expected currency PLN, got %+v", result.Candidates[0])
+	}
+}
+
 func TestLamodaSPSNPageIsBotChallenge(t *testing.T) {
 	body := []byte(`<script>function get_cookie_spsn() { return "spsn=123"; }</script>`)
 	if !isBotChallenge(body) {

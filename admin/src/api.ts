@@ -27,6 +27,7 @@ export interface UserTracker {
 }
 
 export interface FallbackTracker {
+  id: string
   userId: string
   userName: string
   title: string

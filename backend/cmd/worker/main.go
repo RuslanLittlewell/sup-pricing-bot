@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
@@ -485,6 +487,15 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
 		var rule cssTextRule
 		if err := json.Unmarshal(extractionRuleJSON, &rule); err == nil && rule.Type == "css_text" && rule.Selector != "" {
+			// Many css_text rules were recorded against pages whose price is already
+			// present in the server-rendered HTML. Try a plain fetch first — it's
+			// faster and, on sites that fingerprint/rate-limit headless Chrome
+			// specifically (the rule's normal path), considerably less flaky than
+			// driving a full browser. Only fall back to the browser if the static
+			// document doesn't actually contain the selector.
+			if price, ok := priceFromStaticCSSRule(fetcher, url, rule, referencePrice); ok {
+				return price, fallbackCurrency, "unknown", "css_text", "", nil
+			}
 			price, err := priceFromCSSRule(ctx, rend, url, rule, referencePrice)
 			if err != nil {
 				return 0, "", "", "", "", err
@@ -540,7 +551,53 @@ type cssTextRule struct {
 }
 
 func priceFromCSSRule(ctx context.Context, rend *renderer.Renderer, url string, rule cssTextRule, referencePrice *float64) (float64, error) {
-	text, err := rend.TextBySelector(ctx, url, rule.Selector)
+	return priceFromSelectorText(rule, referencePrice, func(selector string) (string, error) {
+		return rend.TextBySelector(ctx, url, selector)
+	})
+}
+
+// priceFromStaticCSSRule attempts a css_text rule against a plain fetch of the page,
+// before the caller falls back to a full headless-browser render. It only handles
+// selectors that can be resolved against the raw document — a " >>> " segment means
+// the recorded selector crosses a shadow-root boundary that doesn't exist until
+// client-side JS runs, which a static parse can never satisfy.
+func priceFromStaticCSSRule(fetcher *extractor.PageFetcher, url string, rule cssTextRule, referencePrice *float64) (float64, bool) {
+	if strings.Contains(rule.Selector, " >>> ") || strings.Contains(rule.ScreenshotSelector, " >>> ") {
+		return 0, false
+	}
+	body, _, err := fetcher.Fetch(url)
+	if err != nil {
+		return 0, false
+	}
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		return 0, false
+	}
+	price, err := priceFromSelectorText(rule, referencePrice, func(selector string) (string, error) {
+		sel := doc.Find(selector)
+		if sel.Length() == 0 {
+			return "", fmt.Errorf("selector not found: %s", selector)
+		}
+		text := strings.TrimSpace(sel.First().Text())
+		if text == "" {
+			return "", fmt.Errorf("selector matched empty text: %s", selector)
+		}
+		return text, nil
+	})
+	if err != nil {
+		return 0, false
+	}
+	return price, true
+}
+
+// priceFromSelectorText resolves a css_text rule's price given a way to read the text
+// behind a selector — either a live DOM query (headless render) or a static document
+// lookup. When the primary selector's price matches referencePrice unchanged, it also
+// scans the wider screenshot_selector block for a lower price, the same way a human
+// re-checking the page would notice a strikethrough/sale price the primary selector
+// alone doesn't capture.
+func priceFromSelectorText(rule cssTextRule, referencePrice *float64, get func(selector string) (string, error)) (float64, error) {
+	text, err := get(rule.Selector)
 	if err != nil {
 		return 0, fmt.Errorf("rule extraction failed: %w", err)
 	}
@@ -550,7 +607,7 @@ func priceFromCSSRule(ctx context.Context, rend *renderer.Renderer, url string, 
 	}
 
 	if referencePrice != nil && priceCents(price) == priceCents(*referencePrice) && rule.ScreenshotSelector != "" {
-		if blockText, err := rend.TextBySelector(ctx, url, rule.ScreenshotSelector); err == nil {
+		if blockText, err := get(rule.ScreenshotSelector); err == nil {
 			blockPrices := parseCurrencyPriceTokensFromText(blockText)
 			minRatio := 0.01
 			if len(blockPrices) == 0 {
