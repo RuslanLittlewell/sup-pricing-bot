@@ -105,6 +105,7 @@ export function TrackersPage({
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead>ID</TableHead>
                 <TableHead>User</TableHead>
                 <TableHead>Product</TableHead>
                 <TableHead>Fallback</TableHead>
@@ -114,13 +115,14 @@ export function TrackersPage({
             <TableBody>
               {data.fallbackTrackers.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-muted-foreground">
+                  <TableCell colSpan={5} className="text-muted-foreground">
                     None currently.
                   </TableCell>
                 </TableRow>
               ) : (
                 data.fallbackTrackers.map((t, i) => (
                   <TableRow key={`${t.userId}-${t.url}-${i}`}>
+                    <TableCell className="font-mono text-xs text-muted-foreground">{t.id}</TableCell>
                     <TableCell>{t.userName}</TableCell>
                     <TableCell>
                       <a
@@ -193,6 +195,7 @@ export function TrackersPage({
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead>ID</TableHead>
                 <TableHead>User</TableHead>
                 <TableHead>Product</TableHead>
                 <TableHead>Error</TableHead>
@@ -206,13 +209,14 @@ export function TrackersPage({
             <TableBody>
               {filteredFailures.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                     {data.failedTrackers.length === 0 ? 'No failing trackers right now.' : 'No errors match these filters.'}
                   </TableCell>
                 </TableRow>
               ) : (
                 filteredFailures.map((t) => (
                   <TableRow key={`${t.kind}-${t.id}`} className={t.consecutiveErrors >= 3 ? 'bg-destructive/5' : undefined}>
+                    <TableCell className="font-mono text-xs text-muted-foreground">{t.id}</TableCell>
                     <TableCell>{t.userName}</TableCell>
                     <TableCell>
                       <div className="flex max-w-[28rem] flex-col gap-1 whitespace-normal">

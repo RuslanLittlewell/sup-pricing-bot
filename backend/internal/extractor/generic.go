@@ -148,41 +148,84 @@ func (e *GenericExtractor) Extract(htmlContent []byte, url string) (*ExtractionR
 	return result, nil
 }
 
+// extractJSONLD walks every application/ld+json script tag looking for a Product
+// entry that carries a usable price. Pages commonly emit more than one such block —
+// e.g. a plain Product schema alongside a Yoast/RankMath-style block wrapping
+// everything in a top-level "@graph" array — and earlier blocks don't always carry
+// a price (WooCommerce's default schema nests it under offers.priceSpecification.price
+// instead of offers.price). A candidate without a price is kept as a fallback for
+// title/image, but the search keeps going for one that does have a price.
 func extractJSONLD(n *html.Node) *jsonLDProduct {
-	if n.Type == html.ElementNode && n.Data == "script" {
-		var isLD bool
-		for _, attr := range n.Attr {
-			if attr.Key == "type" && attr.Val == "application/ld+json" {
-				isLD = true
-				break
+	var fallback *jsonLDProduct
+
+	consider := func(obj map[string]interface{}) *jsonLDProduct {
+		if p := parseLDObject(obj); p != nil {
+			if p.Offers.Price != "" {
+				return p
+			}
+			if fallback == nil {
+				fallback = p
 			}
 		}
-		if isLD && n.FirstChild != nil {
-			var data interface{}
-			if err := json.Unmarshal([]byte(n.FirstChild.Data), &data); err == nil {
-				if obj, ok := data.(map[string]interface{}); ok {
-					if p := parseLDObject(obj); p != nil {
-						return p
+		if graph, ok := obj["@graph"].([]interface{}); ok {
+			for _, item := range graph {
+				if gobj, ok := item.(map[string]interface{}); ok {
+					if p := parseLDObject(gobj); p != nil {
+						if p.Offers.Price != "" {
+							return p
+						}
+						if fallback == nil {
+							fallback = p
+						}
 					}
 				}
-				if arr, ok := data.([]interface{}); ok {
-					for _, item := range arr {
-						if obj, ok := item.(map[string]interface{}); ok {
-							if p := parseLDObject(obj); p != nil {
-								return p
+			}
+		}
+		return nil
+	}
+
+	var walk func(*html.Node) *jsonLDProduct
+	walk = func(n *html.Node) *jsonLDProduct {
+		if n.Type == html.ElementNode && n.Data == "script" {
+			var isLD bool
+			for _, attr := range n.Attr {
+				if attr.Key == "type" && attr.Val == "application/ld+json" {
+					isLD = true
+					break
+				}
+			}
+			if isLD && n.FirstChild != nil {
+				var data interface{}
+				if err := json.Unmarshal([]byte(n.FirstChild.Data), &data); err == nil {
+					if obj, ok := data.(map[string]interface{}); ok {
+						if p := consider(obj); p != nil {
+							return p
+						}
+					}
+					if arr, ok := data.([]interface{}); ok {
+						for _, item := range arr {
+							if obj, ok := item.(map[string]interface{}); ok {
+								if p := consider(obj); p != nil {
+									return p
+								}
 							}
 						}
 					}
 				}
 			}
 		}
-	}
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if p := extractJSONLD(c); p != nil {
-			return p
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if p := walk(c); p != nil {
+				return p
+			}
 		}
+		return nil
 	}
-	return nil
+
+	if p := walk(n); p != nil {
+		return p
+	}
+	return fallback
 }
 
 func parseLDObject(obj map[string]interface{}) *jsonLDProduct {
@@ -200,12 +243,7 @@ func parseLDObject(obj map[string]interface{}) *jsonLDProduct {
 	p.Image, _ = obj["image"].(string)
 
 	if offers, ok := obj["offers"].(map[string]interface{}); ok {
-		p.Offers.Price, _ = offers["price"].(string)
-		if p.Offers.Price == "" {
-			if pr, ok := offers["price"].(float64); ok {
-				p.Offers.Price = fmt.Sprintf("%.2f", pr)
-			}
-		}
+		p.Offers.Price = offerPrice(offers)
 		p.Offers.PriceCurrency, _ = offers["priceCurrency"].(string)
 		p.Offers.Availability, _ = offers["availability"].(string)
 	}
@@ -213,12 +251,7 @@ func parseLDObject(obj map[string]interface{}) *jsonLDProduct {
 	if offersArr, ok := obj["offers"].([]interface{}); ok && len(offersArr) > 0 {
 		if firstOffer, ok := offersArr[0].(map[string]interface{}); ok {
 			if p.Offers.Price == "" {
-				p.Offers.Price, _ = firstOffer["price"].(string)
-				if p.Offers.Price == "" {
-					if pr, ok := firstOffer["price"].(float64); ok {
-						p.Offers.Price = fmt.Sprintf("%.2f", pr)
-					}
-				}
+				p.Offers.Price = offerPrice(firstOffer)
 			}
 			if p.Offers.PriceCurrency == "" {
 				p.Offers.PriceCurrency, _ = firstOffer["priceCurrency"].(string)
@@ -230,6 +263,27 @@ func parseLDObject(obj map[string]interface{}) *jsonLDProduct {
 	}
 
 	return p
+}
+
+// offerPrice reads an Offer's price, trying the direct "price" field first and
+// falling back to the nested priceSpecification.price — WooCommerce's default
+// Product schema (as opposed to plugins like Yoast SEO) only populates the latter.
+func offerPrice(offer map[string]interface{}) string {
+	if price, ok := offer["price"].(string); ok && price != "" {
+		return price
+	}
+	if price, ok := offer["price"].(float64); ok {
+		return fmt.Sprintf("%.2f", price)
+	}
+	if spec, ok := offer["priceSpecification"].(map[string]interface{}); ok {
+		if price, ok := spec["price"].(string); ok && price != "" {
+			return price
+		}
+		if price, ok := spec["price"].(float64); ok {
+			return fmt.Sprintf("%.2f", price)
+		}
+	}
+	return ""
 }
 
 func extractMetaTags(n *html.Node) (title, image, price, currency, availability string) {

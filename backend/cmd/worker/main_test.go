@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/littlewell/price-tracker/internal/extractor"
@@ -70,6 +71,55 @@ func TestBestPriceCandidatePrefersUnchangedPriceOverFirstCandidate(t *testing.T)
 	}
 	if price != 229 {
 		t.Fatalf("expected unchanged reference price 229, got %v", price)
+	}
+}
+
+// priceFromSelectorText is shared between the headless-render path (priceFromCSSRule)
+// and the static-fetch path (priceFromStaticCSSRule) — this exercises the shared logic
+// directly against a fake selector lookup, without needing a browser or network.
+func TestPriceFromSelectorTextReadsPrimarySelector(t *testing.T) {
+	rule := cssTextRule{Selector: "strong#price"}
+	price, err := priceFromSelectorText(rule, nil, func(selector string) (string, error) {
+		if selector != rule.Selector {
+			t.Fatalf("unexpected selector %q", selector)
+		}
+		return "4 716,80 zł", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if price != 4716.80 {
+		t.Fatalf("expected 4716.80, got %v", price)
+	}
+}
+
+// When the primary selector's price is unchanged from the reference, a wider
+// screenshot_selector scan should still surface a lower (sale) price sitting
+// alongside it, same as the render path does.
+func TestPriceFromSelectorTextFindsSalePriceInScreenshotBlock(t *testing.T) {
+	referencePrice := 1035.0
+	rule := cssTextRule{Selector: "span.price", ScreenshotSelector: "div.price-block"}
+	price, err := priceFromSelectorText(rule, &referencePrice, func(selector string) (string, error) {
+		if selector == rule.Selector {
+			return "1035,00 zł", nil
+		}
+		return "1035,00 zł 828,00 zł", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if price != 828 {
+		t.Fatalf("expected sale price 828, got %v", price)
+	}
+}
+
+func TestPriceFromSelectorTextErrorsWhenSelectorLookupFails(t *testing.T) {
+	rule := cssTextRule{Selector: "strong#price"}
+	_, err := priceFromSelectorText(rule, nil, func(selector string) (string, error) {
+		return "", errors.New("selector not found")
+	})
+	if err == nil {
+		t.Fatal("expected an error when the selector can't be resolved")
 	}
 }
 
