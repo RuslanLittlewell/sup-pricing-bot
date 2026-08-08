@@ -54,6 +54,18 @@ var outOfStockPhrases = []string{
 	"нет у поставщика",
 	"снят с продажи",
 	"больше не продаётся",
+	// Italiano
+	"esaurito",
+	"esaurita",
+	"esauriti",
+	"esaurite",
+	"non disponibile",
+	"temporaneamente esaurito",
+	"temporaneamente non disponibile",
+	"attualmente non disponibile",
+	"avvisami",
+	"prodotto non disponibile",
+	"ritirato dalla vendita",
 }
 
 // minStockBodyBytes is the smallest body we'll treat as a real product page for the
@@ -71,20 +83,34 @@ const minStockBodyBytes = 512
 // otherwise — since the absence of an out-of-stock phrase on a substantive page is our only
 // available in-stock signal.
 func DetectStockStatusFromText(htmlContent []byte) string {
-	lowered := strings.ToLower(string(htmlContent))
-	for _, phrase := range outOfStockPhrases {
-		if strings.Contains(lowered, phrase) {
-			return "out_of_stock"
-		}
+	if ContainsOutOfStockPhrase(string(htmlContent)) {
+		return "out_of_stock"
 	}
-	if len(strings.TrimSpace(lowered)) < minStockBodyBytes {
+	if len(strings.TrimSpace(string(htmlContent))) < minStockBodyBytes {
 		return "unknown"
 	}
 	return "in_stock"
 }
 
+// ContainsOutOfStockPhrase does the same case-insensitive phrase match as
+// DetectStockStatusFromText, without that function's minimum-body-size gate — which exists
+// to distinguish a genuinely empty in-stock page from a truncated/broken fetch, a concern
+// that doesn't apply to a short, deliberately-scoped snippet like one size button's
+// aria-label. Shared with per-variant checks (e.g. shops.HMSizeVariant.Label) that want the
+// same locale-aware phrase list without that gate misfiring on their inherently small input.
+func ContainsOutOfStockPhrase(text string) bool {
+	lowered := strings.ToLower(text)
+	for _, phrase := range outOfStockPhrases {
+		if strings.Contains(lowered, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 // StockRule is a stock tracker's extraction_rule — set for trackers that watch one
-// specific variant (currently only "zara_size") rather than the item as a whole.
+// specific variant ("zara_size", "hm_size", "nike_size", "wildberries_stock") rather than
+// the item as a whole.
 type StockRule struct {
 	Type    string `json:"type"`
 	Size    string `json:"size"`
@@ -103,7 +129,10 @@ type StockRule struct {
 // stock trackers. Shared by the worker's periodic recheck and the bot's manual /check.
 // A "zara_size" tracker can also report "keyword_scan": when the product is fully
 // sold out, Zara omits the hasVariant JSON-LD block entirely (no size picker to render),
-// so we fall back to the same phrase scan the generic path uses.
+// so we fall back to the same phrase scan the generic path uses. "hm_size" reports
+// shops.HMStockMethod — H&M has no structured variant data at all, so per-size status there
+// always comes from running the same out-of-stock phrase list against one size button's
+// aria-label instead (see shops.ParseHMSizes and ContainsOutOfStockPhrase).
 func DetectStockStatus(extractionRuleJSON []byte, body []byte) (status, method string, err error) {
 	if len(extractionRuleJSON) > 0 && string(extractionRuleJSON) != "{}" {
 		var rule StockRule
@@ -145,6 +174,21 @@ func DetectStockStatus(extractionRuleJSON []byte, body []byte) (status, method s
 				return "in_stock", "wildberries_api", nil
 			}
 			return "out_of_stock", "wildberries_api", nil
+		}
+		if jsonErr := json.Unmarshal(extractionRuleJSON, &rule); jsonErr == nil && rule.Type == "hm_size" {
+			variants, herr := shops.ParseHMSizes(body)
+			if herr != nil {
+				return "", "", fmt.Errorf("hm size lookup failed: %w", herr)
+			}
+			for _, v := range variants {
+				if v.Size == rule.Size {
+					if ContainsOutOfStockPhrase(v.Label) {
+						return "out_of_stock", shops.HMStockMethod, nil
+					}
+					return "in_stock", shops.HMStockMethod, nil
+				}
+			}
+			return "", "", fmt.Errorf("size %q is no longer listed on the page", rule.Size)
 		}
 		if jsonErr := json.Unmarshal(extractionRuleJSON, &rule); jsonErr == nil && rule.Type == "nike_size" {
 			available, nikeErr := shops.ParseNikeGTINAvailability(body, rule.GTIN)

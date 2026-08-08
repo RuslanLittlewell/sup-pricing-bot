@@ -163,6 +163,14 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 		stockStatus = "in_stock"
 		stockMethod = shops.HebeStockMethod
 	}
+	// Refuse to seed a tracker from an Akamai block page, which reads as in_stock to the
+	// keyword scan purely because it contains no out-of-stock wording (shops.HasHMSizePicker).
+	if shops.IsHMURL(url) && !shops.HasHMSizePicker(body) {
+		log.Warn().Str("url", url).Int("body_bytes", len(body)).Msg("H&M product page not reached; refusing to create tracker")
+		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "page_load_failed_detail"), "H&M blocked the request"))
+		clearTelegramState(ctx, pool, chatID)
+		return
+	}
 	if shops.IsWildberriesURL(url) {
 		product, parseErr := shops.ParseWildberriesProduct(body, shops.WildberriesArticle(url))
 		if parseErr != nil {
@@ -226,16 +234,19 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 }
 
 // startStockTracking is the entry point for the "track availability" flow. Most sites
-// only expose a whole-item in-stock/out-of-stock signal, but some (Zara, so far) publish
-// per-size availability in a structured block on the page — for those, offer a size
-// picker instead of tracking the item as a whole, since "back in stock" in one size the
-// user doesn't want isn't the notification they're after.
+// only expose a whole-item in-stock/out-of-stock signal, but some (Zara, Nike, H&M) publish
+// per-size availability on the page — for those, offer a size picker instead of tracking
+// the item as a whole, since "back in stock" in one size the user doesn't want isn't the
+// notification they're after.
 func startStockTracking(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, fetcher *extractor.PageFetcher) {
 	if shops.IsZaraURL(url) && offerZaraSizeSelection(ctx, pool, tg, chatID, userID, lang, url, log, fetcher) {
 		return
 	}
 	if shops.IsNikeURL(url) {
 		offerNikeSizeSelection(ctx, pool, tg, chatID, userID, lang, url, log, fetcher)
+		return
+	}
+	if shops.IsHMURL(url) && offerHMSizeSelection(ctx, pool, tg, chatID, userID, lang, url, log, fetcher) {
 		return
 	}
 	createStockTrackerFromURL(ctx, pool, tg, chatID, userID, lang, url, log, fetcher)
@@ -318,6 +329,67 @@ func offerZaraSizeSelection(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	}
 	rows = append(rows, []inlineButton{button(tr(lang, "button_back"), "menu:back")})
 	_ = tg.SendMessageWithMarkup(chatID, tr(lang, "choose_size_prompt"), makeInlineKeyboard(rows...))
+	return true
+}
+
+// offerHMSizeSelection mirrors offerZaraSizeSelection, but H&M has no structured variant
+// data to read — availability comes from each size button's aria-label text instead (see
+// shops.ParseHMSizes), scanned through the same out-of-stock phrase list used elsewhere
+// (extractor.ContainsOutOfStockPhrase) rather than a schema.org availability field.
+func offerHMSizeSelection(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, log zerolog.Logger, fetcher *extractor.PageFetcher) bool {
+	SendTelegramMessage(tg, chatID, tr(lang, "stock_search_started"))
+
+	body, fetchMethod, err := fetcher.Fetch(url)
+	if err != nil {
+		log.Warn().Err(err).Str("url", url).Msg("hm size lookup: fetch failed, falling back to whole-item stock tracking")
+		return false
+	}
+
+	variants, err := shops.ParseHMSizes(body)
+	if err != nil {
+		log.Info().Err(err).Str("url", url).Msg("hm size lookup: no size data found, falling back to whole-item stock tracking")
+		return false
+	}
+
+	var outOfStock []sizeSelectionVariant
+	for _, v := range variants {
+		if extractor.ContainsOutOfStockPhrase(v.Label) {
+			outOfStock = append(outOfStock, sizeSelectionVariant{Size: v.Size})
+		}
+	}
+	if len(outOfStock) == 0 {
+		return false
+	}
+
+	ruleJSON, err := json.Marshal(sizeSelectionState{RuleType: "hm_size", StockMethod: shops.HMStockMethod, FetchMethod: fetchMethod, Variants: outOfStock})
+	if err != nil {
+		log.Error().Err(err).Msg("failed to marshal hm size candidates")
+		return false
+	}
+
+	result, _ := extractor.NewGeneric().Extract(body, url)
+	title := ""
+	if result != nil {
+		title = result.Title
+	}
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO telegram_states (telegram_id, user_id, step, url, title, rule)
+		VALUES ($1, $2, 'awaiting_size', $3, $4, $5)
+		ON CONFLICT (telegram_id) DO UPDATE
+		SET user_id = $2, step = 'awaiting_size', url = $3, title = $4, rule = $5, updated_at = now()
+	`, chatID, userID, url, title, ruleJSON)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to save hm size-selection state")
+		return false
+	}
+
+	var hmRows [][]inlineButton
+	for i, v := range outOfStock {
+		hmRows = append(hmRows, []inlineButton{button(v.Size, fmt.Sprintf("size:%d", i))})
+	}
+	hmRows = append(hmRows, []inlineButton{button(tr(lang, "button_back"), "menu:back")})
+	_ = tg.SendMessageWithMarkup(chatID, tr(lang, "choose_size_prompt"), makeInlineKeyboard(hmRows...))
 	return true
 }
 

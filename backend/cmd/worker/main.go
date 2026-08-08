@@ -242,6 +242,14 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 		stockStatus = "in_stock"
 		stockMethod = shops.HebeStockMethod
 	}
+	// Without this, an Akamai block page (which carries no out-of-stock wording) reaches the
+	// keyword scan and comes back "in_stock" — see shops.HasHMSizePicker.
+	if shops.IsHMURL(url) && !shops.HasHMSizePicker(body) {
+		err := fmt.Errorf("H&M product page not reached: no size picker in the %d-byte body", len(body))
+		log.Error().Err(err).Str("tracker_id", id).Msg("stock detection failed")
+		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, manualCheck, log)
+		return
+	}
 
 	pool.Exec(ctx, `
 		INSERT INTO stock_points (id, tracker_id, stock_status, source, status, extraction_method, fetch_method)

@@ -4,6 +4,7 @@
 package shops
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -25,6 +26,23 @@ func IsZaraURL(rawURL string) bool {
 	}
 	host := strings.ToLower(parsed.Hostname())
 	return host == "zara.com" || strings.HasSuffix(host, ".zara.com")
+}
+
+// zaraProductDetailMarker is the size-selector wrapper Zara renders on every product page.
+// It survives a full sell-out — when no size is left to pick, the wrapper still renders and
+// holds the "similar products / OUT OF STOCK" button instead of a size list — which makes it
+// a reliable "this really is a product page" marker, unlike the size list itself.
+const zaraProductDetailMarker = "product-detail-size-selector-std"
+
+// IsZaraProductPage reports whether body is a real Zara PDP rather than a lookalike some
+// fetch tier handed back. Akamai answers blocked requests with an interstitial that a
+// headless render turns into a small, product-free page carrying no challenge marker of its
+// own — it passes isBotChallenge, then reaches the parsers as if it were the product. There
+// it has neither variant data nor out-of-stock wording, so the sold-out fallback can't fire
+// and the check dies with a misleading "no size data found on page". Requiring positive
+// proof of a PDP keeps that body from ever being mistaken for one.
+func IsZaraProductPage(body []byte) bool {
+	return bytes.Contains(body, []byte(zaraProductDetailMarker))
 }
 
 // ZaraSizeVariant is one size option of a Zara product, with its live availability.
