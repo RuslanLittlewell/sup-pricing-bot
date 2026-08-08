@@ -116,6 +116,61 @@ func TestDetectStockStatusZaraSizeUnreadablePageStillErrors(t *testing.T) {
 	}
 }
 
+func TestDetectStockStatusItalianOutOfStockPhrase(t *testing.T) {
+	// The false positive this test guards against: an it_it H&M page reporting in_stock
+	// because the generic phrase list only covered English/Polish/Russian wording.
+	status, method, err := DetectStockStatus(nil, []byte(`<html><body>`+strings.Repeat("Abito in misto lino con peplum ", 30)+`<button>Avvisami</button></body></html>`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != "out_of_stock" || method != "keyword_scan" {
+		t.Fatalf("expected out_of_stock/keyword_scan, got %s/%s", status, method)
+	}
+}
+
+func TestDetectStockStatusHMSizeOutOfStock(t *testing.T) {
+	rule := []byte(`{"type":"hm_size","size":"XS"}`)
+	body := []byte(`<div data-testid="size-selector"><ul data-testid="grid">
+<li><div id="sizeButton-0" data-testid="sizeButton-0" role="radio" aria-label="Taglia XS: esaurita. Seleziona per vedere prodotti simili o scegli di ricevere una notifica se torna disponibile."><div data-testid="002-out-of-stock">&nbsp;&nbsp;XS&nbsp;&nbsp;</div></div></li>
+<li><div id="sizeButton-1" data-testid="sizeButton-1" role="radio" aria-label="Taglia M."><div data-testid="004-in-stock">&nbsp;&nbsp;M&nbsp;&nbsp;</div></div></li>
+</ul></div>`)
+
+	status, method, err := DetectStockStatus(rule, body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != "out_of_stock" || method != "hm_aria_label" {
+		t.Fatalf("expected out_of_stock/hm_aria_label, got %s/%s", status, method)
+	}
+}
+
+func TestDetectStockStatusHMSizeInStock(t *testing.T) {
+	rule := []byte(`{"type":"hm_size","size":"M"}`)
+	body := []byte(`<div data-testid="size-selector"><ul data-testid="grid">
+<li><div id="sizeButton-0" data-testid="sizeButton-0" role="radio" aria-label="Taglia XS: esaurita."><div data-testid="002-out-of-stock">&nbsp;&nbsp;XS&nbsp;&nbsp;</div></div></li>
+<li><div id="sizeButton-1" data-testid="sizeButton-1" role="radio" aria-label="Taglia M."><div data-testid="004-in-stock">&nbsp;&nbsp;M&nbsp;&nbsp;</div></div></li>
+</ul></div>`)
+
+	status, method, err := DetectStockStatus(rule, body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != "in_stock" || method != "hm_aria_label" {
+		t.Fatalf("expected in_stock/hm_aria_label, got %s/%s", status, method)
+	}
+}
+
+func TestDetectStockStatusHMSizeNoLongerListed(t *testing.T) {
+	rule := []byte(`{"type":"hm_size","size":"XL"}`)
+	body := []byte(`<div data-testid="size-selector"><ul data-testid="grid">
+<li><div id="sizeButton-0" data-testid="sizeButton-0" role="radio" aria-label="Taglia M."><div data-testid="004-in-stock">&nbsp;&nbsp;M&nbsp;&nbsp;</div></div></li>
+</ul></div>`)
+
+	if _, _, err := DetectStockStatus(rule, body); err == nil {
+		t.Fatal("expected an error when the tracked size is no longer listed")
+	}
+}
+
 func TestDetectStockStatusWildberriesAPI(t *testing.T) {
 	rule := []byte(`{"type":"wildberries_stock","article":"264041181"}`)
 	body := []byte(`{"products":[{"id":264041181,"name":"Product","sizes":[{"stocks":[{"qty":2}],"price":{"product":10000,"logistics":500}}]}]}`)

@@ -77,3 +77,23 @@ func TestParseZaraPriceNone(t *testing.T) {
 		t.Fatal("expected no price to be found")
 	}
 }
+
+func TestIsZaraProductPage(t *testing.T) {
+	// A fully sold-out PDP still renders the size-selector wrapper (holding the
+	// "similar products / OUT OF STOCK" button instead of a size list), so the marker has to
+	// hold for it too — that's the case the sold-out fallback depends on.
+	soldOut := []byte(`<div class="product-detail-size-selector-std product-detail-info__size-selector">` +
+		`<div class="product-detail-size-selector-std__wrapper"><button data-qa-action="show-similar-products">` +
+		`<span class="zds-button__second-line"><span>OUT OF STOCK</span></span></button></div></div>`)
+	if !IsZaraProductPage(soldOut) {
+		t.Error("a sold-out Zara PDP must still be recognised as a product page")
+	}
+
+	// Akamai's interstitial, verbatim from a blocked request. It carries no challenge marker
+	// once rendered, so without this check it reaches the parsers as if it were the product.
+	interstitial := []byte(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="5; URL='/pl/en/x.html'" />` +
+		`<title>&nbsp;</title></head><body><iframe src="/interstitial/ic.html"></iframe></body></html>`)
+	if IsZaraProductPage(interstitial) {
+		t.Error("an Akamai interstitial must not pass as a Zara product page")
+	}
+}

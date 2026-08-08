@@ -15,6 +15,7 @@ import (
 	"github.com/littlewell/price-tracker/internal/renderer"
 	"github.com/littlewell/price-tracker/internal/scraper"
 	"github.com/littlewell/price-tracker/internal/security"
+	"github.com/littlewell/price-tracker/internal/shops"
 	"github.com/littlewell/price-tracker/internal/useragent"
 )
 
@@ -101,10 +102,8 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 	}
 	// Zara historically worked through a browser renderer but currently rejects the
 	// Chromium fingerprint. Try an isolated Firefox engine before the shared HTTP chain.
-	if isZaraURL(url) && f.firefox != nil {
-		if body, firefoxErr := f.fetchViaFirefox(url); firefoxErr == nil {
-			return body, FetchMethodFirefox, nil
-		}
+	if body, ok := f.fetchZaraViaFirefox(url); ok {
+		return body, FetchMethodFirefox, nil
 	}
 
 	if f.renderer != nil && shouldRenderFirst(url) {
@@ -119,10 +118,10 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 		if !shouldRenderFallback(err) {
 			return nil, "", err
 		}
-		if impersonated, impersonateErr := f.fetchViaCurlCFFI(url); impersonateErr == nil {
+		if impersonated, impersonateErr := f.fetchViaCurlCFFI(url); impersonateErr == nil && usableBody(url, impersonated) {
 			return impersonated, FetchMethodCurlCFFI, nil
 		}
-		if relayed, relayErr := f.fetchViaRelay(url); relayErr == nil {
+		if relayed, relayErr := f.fetchViaRelay(url); relayErr == nil && usableBody(url, relayed) {
 			return relayed, FetchMethodCFRelay, nil
 		}
 		if f.renderer == nil {
@@ -132,17 +131,20 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 		if renderErr != nil {
 			return nil, "", fmt.Errorf("http fetch failed: %w; renderer fallback failed: %w", err, renderErr)
 		}
-		if isBotChallenge([]byte(rendered)) {
+		if isBotChallenge([]byte(rendered)) || !usableBody(url, []byte(rendered)) {
+			if retried, ok := f.fetchZaraViaFirefox(url); ok {
+				return retried, FetchMethodFirefox, nil
+			}
 			return nil, "", errBotBlocked
 		}
 		return []byte(rendered), FetchMethodRender, nil
 	}
 
-	if isBotChallenge(body) {
-		if impersonated, impersonateErr := f.fetchViaCurlCFFI(url); impersonateErr == nil {
+	if isBotChallenge(body) || !usableBody(url, body) {
+		if impersonated, impersonateErr := f.fetchViaCurlCFFI(url); impersonateErr == nil && usableBody(url, impersonated) {
 			return impersonated, FetchMethodCurlCFFI, nil
 		}
-		if relayed, relayErr := f.fetchViaRelay(url); relayErr == nil {
+		if relayed, relayErr := f.fetchViaRelay(url); relayErr == nil && usableBody(url, relayed) {
 			return relayed, FetchMethodCFRelay, nil
 		}
 		if f.renderer == nil {
@@ -152,7 +154,10 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 		if err != nil {
 			return nil, "", fmt.Errorf("renderer fallback failed: %w", err)
 		}
-		if isBotChallenge([]byte(rendered)) {
+		if isBotChallenge([]byte(rendered)) || !usableBody(url, []byte(rendered)) {
+			if retried, ok := f.fetchZaraViaFirefox(url); ok {
+				return retried, FetchMethodFirefox, nil
+			}
 			return nil, "", errBotBlocked
 		}
 		return []byte(rendered), FetchMethodRender, nil
@@ -162,6 +167,42 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 		_ = f.proxies.SaveFingerprint(context.Background(), url, fp)
 	}
 	return body, FetchMethodDirect, nil
+}
+
+// fetchZaraViaFirefox returns a Zara page body only when the isolated Firefox engine
+// produced a real product page. Firefox is the only tier that currently gets through Zara's
+// Akamai edge, so it's tried first and — via usableBody's rejection of the other tiers'
+// output — retried once at the end rather than letting the chain settle for a body that
+// isn't the product. ok is false when Zara isn't the target, the engine isn't configured,
+// the fetch failed, or what came back isn't a PDP.
+func (f *PageFetcher) fetchZaraViaFirefox(url string) ([]byte, bool) {
+	if !isZaraURL(url) || f.firefox == nil {
+		return nil, false
+	}
+	body, err := f.fetchViaFirefox(url)
+	if err != nil || !usableBody(url, body) {
+		return nil, false
+	}
+	return body, true
+}
+
+// usableBody reports whether body is the page that was actually asked for. A fallback tier
+// can return a lookalike (an Akamai interstitial rendered into product-free HTML) that
+// carries no bot-challenge marker, so isBotChallenge passes it through and the parsers treat
+// it as the real page. Sites we can positively identify get checked here instead; everything
+// else keeps the previous behaviour of trusting any non-challenge body.
+func usableBody(rawURL string, body []byte) bool {
+	if isZaraURL(rawURL) {
+		return shops.IsZaraProductPage(body)
+	}
+	// H&M's Akamai edge sometimes returns a small HTML interstitial with HTTP 200 and
+	// wording that is not covered by isBotChallenge. Treat only a real server-rendered
+	// product page (identified by its size picker) as usable, so a soft block from direct,
+	// curl-cffi, or the relay cannot stop the fallback chain before the next tier is tried.
+	if shops.IsHMURL(rawURL) {
+		return shops.HasHMSizePicker(body)
+	}
+	return true
 }
 
 func isZaraURL(rawURL string) bool {
