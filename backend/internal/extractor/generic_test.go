@@ -2,6 +2,17 @@ package extractor
 
 import "testing"
 
+func TestGenericExtractsUniqloProductPriceBeforeBroadRegex(t *testing.T) {
+	body := []byte(`<html><head><title>Wide Pants</title></head><body><script>window.__PRELOADED_STATE__ = {"noise":"z2","entity":{"product":{"productId":"E479620-000","prices":{"base":{"currency":{"code":"INR","symbol":"₹"},"value":2490},"promo":null}}}};</script></body></html>`)
+	result, err := NewGeneric().Extract(body, "https://www.uniqlo.com/in/en/products/E479620-000/00?colorDisplayCode=09&sizeDisplayCode=007")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Candidates) == 0 || result.Candidates[0].Price != "2490.00" || result.Candidates[0].Currency != "INR" || RuleType(result.Candidates[0].Rule) != "uniqlo_product_data" {
+		t.Fatalf("expected exact Uniqlo product price, got %+v", result.Candidates)
+	}
+}
+
 func TestGenericExtractsHebePromotionalPriceBeforeJSONLDRegularPrice(t *testing.T) {
 	body := []byte(`<html><body>
 <form data-product-gtm="{&quot;currency&quot;:&quot;PLN&quot;,&quot;regular_price&quot;:89.99,&quot;current_price&quot;:62.99}"></form>

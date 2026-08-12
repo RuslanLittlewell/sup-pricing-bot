@@ -72,6 +72,19 @@ func (e *GenericExtractor) Extract(htmlContent []byte, url string) (*ExtractionR
 			}
 		}
 	}
+	if shops.IsUniqloURL(url) {
+		if uniqloPrice, uniqloErr := shops.ParseUniqloPrice(htmlContent, url); uniqloErr == nil {
+			rule, _ := json.Marshal(map[string]string{"type": shops.UniqloPriceMethod, "field": "prices.promo.value|prices.base.value"})
+			result.Candidates = append(result.Candidates, PriceCandidate{
+				Price: fmt.Sprintf("%.2f", uniqloPrice.Current), Currency: uniqloPrice.Currency,
+				Confidence: 1, Label: "Uniqlo selected product price", Rule: rule,
+			})
+			if uniqloPrice.Regular > uniqloPrice.Current {
+				result.RegularPrice = fmt.Sprintf("%.2f", uniqloPrice.Regular)
+				result.DiscountPercent = uniqloPrice.DiscountPercent
+			}
+		}
+	}
 
 	if ld := extractJSONLD(doc); ld != nil {
 		result.Title = ld.Name
