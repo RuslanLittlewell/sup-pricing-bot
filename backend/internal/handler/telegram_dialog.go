@@ -260,6 +260,60 @@ func tryWildberriesPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *t
 	return true
 }
 
+// tryWooCommercePriceCandidate offers the price a WooCommerce shop publishes through its
+// own Store API, and saves the resolved endpoint as the tracker's rule so later checks go
+// straight to it. Unlike the Zara and Wildberries shortcuts above this can't be gated on
+// the domain — WooCommerce is a platform, not a shop — so it costs one page fetch to find
+// out. That fetch pays for itself when it succeeds: it replaces the headless-browser price
+// block search that would otherwise run next, which is far more expensive than an HTTP GET.
+func tryWooCommercePriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, productURL string, log zerolog.Logger, fetcher *extractor.PageFetcher) bool {
+	if fetcher == nil {
+		return false
+	}
+	body, _, err := fetchPageWithTimeout(fetcher, productURL, 30*time.Second)
+	if err != nil || !shops.IsWooCommercePage(body) {
+		return false
+	}
+	apiURL, ok := shops.WooStoreProductsURL(shops.WPAPIRoot(body), productURL)
+	if !ok {
+		return false
+	}
+	apiBody, _, err := fetcher.Fetch(apiURL)
+	if err != nil {
+		log.Warn().Err(err).Str("url", productURL).Msg("woocommerce price candidate: store API fetch failed")
+		return false
+	}
+	product, err := shops.ParseWooStoreProduct(apiBody, productURL)
+	if err != nil || product.Price <= 0 {
+		log.Info().Err(err).Str("url", productURL).Msg("woocommerce price candidate: store API returned no usable price")
+		return false
+	}
+	rule, err := shops.NewWooStoreRule(apiURL)
+	if err != nil {
+		return false
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE telegram_states
+		SET step = 'awaiting_confirm', title = $2, initial_price = $3, currency = $4, candidate_index = 0, rule = $5, updated_at = now()
+		WHERE telegram_id = $1
+	`, chatID, product.Name, product.Price, product.Currency, rule); err != nil {
+		log.Error().Err(err).Msg("failed to save woocommerce price candidate state")
+		return false
+	}
+	log.Info().
+		Int64("telegram_id", chatID).
+		Str("user_id", userID).
+		Str("url", productURL).
+		Str("api_url", apiURL).
+		Float64("price", product.Price).
+		Str("currency", product.Currency).
+		Bool("in_stock", product.InStock).
+		Msg("woocommerce store API price candidate found")
+	markup := makeInlineKeyboard([]inlineButton{button(tr(lang, "button_yes"), "candidate:yes"), button(tr(lang, "button_no"), "candidate:no")})
+	_ = tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "candidate_text_caption"), product.Price), markup)
+	return true
+}
+
 // sendScanExhaustedApology sends the "we tried every method and still couldn't scan this
 // site" apology and returns true — but only when err signals that even the last-resort
 // Gemini tier exhausted every model (see extractor.IsAllGeminiModelsFailed). For any other
@@ -563,6 +617,10 @@ func sendNextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		}
 		SendTelegramMessage(tg, chatID, tr(lang, "price_not_found"))
 		clearTelegramState(ctx, pool, chatID)
+		return
+	}
+
+	if index == 0 && tryWooCommercePriceCandidate(ctx, pool, tg, chatID, userID, lang, url, log, fetcher) {
 		return
 	}
 

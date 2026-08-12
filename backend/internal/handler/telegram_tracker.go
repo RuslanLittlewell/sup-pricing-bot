@@ -186,6 +186,28 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 		}
 	}
 
+	// A WooCommerce shop states availability for this exact product. Prefer it over the
+	// keyword scan, which reads an in-stock WooCommerce page as out_of_stock whenever the
+	// word "unavailable" appears anywhere in it — and it routinely does, in the variation
+	// picker's own boilerplate template and in the cart scripts' localisation strings.
+	if shops.IsWooCommercePage(body) {
+		if apiURL, ok := shops.WooStoreProductsURL(shops.WPAPIRoot(body), url); ok {
+			if apiBody, _, apiErr := fetcher.Fetch(apiURL); apiErr == nil {
+				if product, parseErr := shops.ParseWooStoreProduct(apiBody, url); parseErr == nil {
+					stockStatus = "out_of_stock"
+					if product.InStock {
+						stockStatus = "in_stock"
+					}
+					stockMethod = shops.WooCommerceMethod
+					if product.Name != "" {
+						title = product.Name
+					}
+					extractionRule, _ = shops.NewWooStoreRule(apiURL)
+				}
+			}
+		}
+	}
+
 	generic := extractor.NewGeneric()
 	result, _ := generic.Extract(body, url)
 	if title == "" && result != nil {
