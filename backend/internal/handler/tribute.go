@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -60,7 +62,10 @@ func TributeWebhook(pool *pgxpool.Pool, cfg *config.Config, baseLog zerolog.Logg
 			return
 		}
 
-		if !verifyTributeSignature(body, r.Header.Get("trbt-signature"), cfg.TributeAPIKey) {
+		signature := r.Header.Get("trbt-signature")
+		signedBySubscriptionsKey := verifyTributeSignature(body, signature, cfg.TributeAPIKey)
+		signedByDigitalKey := verifyTributeSignature(body, signature, cfg.TributeDigitalAPIKey)
+		if !signedBySubscriptionsKey && !signedByDigitalKey {
 			baseLog.Warn().Msg("tribute webhook: invalid or missing signature")
 			http.Error(w, "invalid signature", http.StatusUnauthorized)
 			return
@@ -70,6 +75,27 @@ func TributeWebhook(pool *pgxpool.Pool, cfg *config.Config, baseLog zerolog.Logg
 		if err := json.Unmarshal(body, &event); err != nil {
 			baseLog.Error().Err(err).Msg("tribute webhook: failed to parse envelope")
 			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+
+		// Tribute uses one webhook URL for this account. Keep subscription events in
+		// Price Bot and forward digital-product events, byte-for-byte with their
+		// original signature, to the numerology bot for independent verification.
+		if event.Name == "new_digital_product" || event.Name == "digital_product_refunded" {
+			if !signedByDigitalKey {
+				http.Error(w, "invalid digital product signature", http.StatusUnauthorized)
+				return
+			}
+			if err := forwardTributeDigitalEvent(r.Context(), cfg.TributeDigitalWebhookURL, body, signature); err != nil {
+				baseLog.Error().Err(err).Str("event", event.Name).Msg("tribute webhook: digital event forwarding failed")
+				http.Error(w, "digital webhook unavailable", http.StatusBadGateway)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if !signedBySubscriptionsKey {
+			http.Error(w, "invalid subscription signature", http.StatusUnauthorized)
 			return
 		}
 
@@ -126,6 +152,28 @@ func TributeWebhook(pool *pgxpool.Pool, cfg *config.Config, baseLog zerolog.Logg
 
 		w.WriteHeader(http.StatusOK)
 	}
+}
+
+func forwardTributeDigitalEvent(ctx context.Context, target string, body []byte, signature string) error {
+	if target == "" {
+		return errors.New("TRIBUTE_DIGITAL_WEBHOOK_URL is not configured")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("trbt-signature", signature)
+	client := &http.Client{Timeout: 15 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("downstream returned HTTP %d", response.StatusCode)
+	}
+	return nil
 }
 
 func applyTributeEvent(ctx context.Context, pool *pgxpool.Pool, eventName string, sub tributeSubscriptionPayload, planBySubscriptionID map[int64]string, log zerolog.Logger) error {

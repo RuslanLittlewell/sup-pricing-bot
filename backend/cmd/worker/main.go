@@ -90,6 +90,7 @@ func main() {
 	// tracker/notification ticks would delay them.
 	go runProxyPoolRefresher(ctx, pool, log)
 	go runGeonodeFetcher(ctx, pool, log)
+	go runTrialExpiry(ctx, pool, log)
 
 	for {
 		select {
@@ -141,6 +142,147 @@ func runProxyPoolRefresher(ctx context.Context, pool *pgxpool.Pool, log zerolog.
 			return
 		}
 	}
+}
+
+// runTrialExpiry retires trials that have run their 14 days. getPlanLimits already treats
+// an elapsed expires_at as Free when it resolves a user's *effective* plan, so quotas stop
+// applying on their own — but two things don't follow from that on their own, and this job
+// is what makes them happen:
+//
+//   - user_plans.plan_code keeps saying 'trial' forever, so anything reading the stored
+//     value rather than the effective one (the admin dashboard, for one) shows a plan the
+//     user no longer has.
+//   - trackers created under the trial's larger allowance stay active past it. Nothing
+//     re-checks the limit after signup, so an expired trial would otherwise keep running
+//     more trackers than Free permits, indefinitely.
+//
+// Deliberately scoped to trials. A lapsed *paid* subscription looks identical in the data
+// but isn't the same situation: Tribute renewals arrive by webhook, so an expires_at that
+// has just passed can simply mean the renewal is a few minutes behind, and completing a
+// paying customer's trackers over that would be a bad trade.
+func runTrialExpiry(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger) {
+	expireTrials(ctx, pool, log)
+
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			expireTrials(ctx, pool, log)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func expireTrials(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger) {
+	rows, err := pool.Query(ctx, `
+		SELECT user_id FROM user_plans
+		WHERE plan_code = 'trial' AND expires_at IS NOT NULL AND expires_at <= now()
+	`)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to query expired trials")
+		return
+	}
+	var userIDs []string
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			log.Error().Err(err).Msg("failed to scan expired trial row")
+			rows.Close()
+			return
+		}
+		userIDs = append(userIDs, userID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Msg("failed to read expired trials")
+		return
+	}
+
+	for _, userID := range userIDs {
+		completed, err := expireTrialForUser(ctx, pool, userID)
+		if err != nil {
+			// Per-user so one failure doesn't strand the rest; the next tick retries it.
+			log.Error().Err(err).Str("user_id", userID).Msg("failed to expire trial")
+			continue
+		}
+		log.Info().
+			Str("user_id", userID).
+			Int("trackers_completed", completed).
+			Msg("trial expired, user moved to free plan")
+	}
+}
+
+// expireTrialForUser downgrades one user and completes whatever no longer fits, in a single
+// transaction so a user can't be left on Free with the trial's tracker count still active.
+func expireTrialForUser(ctx context.Context, pool *pgxpool.Pool, userID string) (int, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	// plan_code moves to 'free' while expires_at is left as it stands: it is the only
+	// record of when the trial actually ended, and the row no longer satisfies
+	// getPlanLimits' "not yet expired" test either way, so Free applies regardless.
+	tag, err := tx.Exec(ctx, `
+		UPDATE user_plans SET plan_code = 'free', status = 'expired', updated_at = now()
+		WHERE user_id = $1 AND plan_code = 'trial' AND expires_at IS NOT NULL AND expires_at <= now()
+	`, userID)
+	if err != nil {
+		return 0, err
+	}
+	if tag.RowsAffected() == 0 {
+		// Another worker got there first. Nothing to do, and nothing to complete either.
+		return 0, tx.Commit(ctx)
+	}
+
+	// Keep the oldest trackers and complete the surplus: the ones added last are the ones
+	// the trial's larger allowance made room for. Ordering is fully determined (id breaks
+	// created_at ties) so a retry after a partial failure picks the same trackers.
+	rows, err := tx.Query(ctx, `
+		WITH allowance AS (
+			SELECT COALESCE((SELECT max_trackers FROM plans WHERE code = 'free'), 3) AS max_trackers
+		), ranked AS (
+			SELECT id, row_number() OVER (ORDER BY created_at, id) AS rn
+			FROM trackers
+			WHERE user_id = $1 AND status = 'active'
+		)
+		UPDATE trackers t
+		SET status = 'completed', completed_at = now(), updated_at = now()
+		FROM ranked r, allowance a
+		WHERE t.id = r.id AND r.rn > a.max_trackers
+		RETURNING t.id
+	`, userID)
+	if err != nil {
+		return 0, err
+	}
+	var completedIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		completedIDs = append(completedIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	for _, id := range completedIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO notifications (id, user_id, tracker_id, type, status)
+			SELECT gen_random_uuid(), user_id, $1, 'trial_expired', 'pending'
+			FROM trackers WHERE id = $1
+		`, id); err != nil {
+			return 0, err
+		}
+	}
+
+	return len(completedIDs), tx.Commit(ctx)
 }
 
 // runGeonodeFetcher pulls geonode.com's free public proxy list into the pool hourly (see
@@ -224,6 +366,8 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 		if apiURL, apiErr := shops.NikeAvailabilityAPIURL(url); apiErr == nil {
 			fetchURL = apiURL
 		}
+	} else if apiURL := shops.WooStoreRuleAPIURL(extractionRuleJSON); apiURL != "" {
+		fetchURL = apiURL
 	}
 	body, fetchMethod, err := fetcher.Fetch(fetchURL)
 	if err != nil {
@@ -232,11 +376,22 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 		return
 	}
 
-	stockStatus, stockMethod, err := extractor.DetectStockStatus(extractionRuleJSON, body)
-	if err != nil {
-		log.Error().Err(err).Str("tracker_id", id).Msg("stock detection failed")
-		handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, manualCheck, log)
-		return
+	// Ask the shop before inferring. A WooCommerce storefront states availability for this
+	// exact product, whereas the phrase scan below can only ask whether out-of-stock
+	// wording appears anywhere in the page — and on these pages it routinely does while
+	// the item is available: in the variation picker's own boilerplate template, in the
+	// localisation strings inlined for its cart scripts, or in a customer review that
+	// happens to use the word.
+	stockStatus, ok := wooCommerceStoreStock(fetcher, extractionRuleJSON, body, url)
+	stockMethod := shops.WooCommerceMethod
+	if !ok {
+		var err error
+		stockStatus, stockMethod, err = extractor.DetectStockStatus(extractionRuleJSON, body)
+		if err != nil {
+			log.Error().Err(err).Str("tracker_id", id).Msg("stock detection failed")
+			handleExtractionError(ctx, pool, id, err.Error(), consecutiveErrors, checkInterval, manualCheck, log)
+			return
+		}
 	}
 	if shops.IsHebeURL(url) && shops.HasHebeAddToCartButton(body) {
 		stockStatus = "in_stock"
@@ -319,6 +474,18 @@ func processTracker(ctx context.Context, pool *pgxpool.Pool, rend *renderer.Rend
 		INSERT INTO price_points (id, tracker_id, price, currency, source, status, extraction_method, fetch_method)
 		VALUES (gen_random_uuid(), $1, $2, $3, 'worker_check', 'success', $4, NULLIF($5, ''))
 	`, id, newPrice, newCurrency, extractionMethod, fetchMethod)
+
+	// This check resolved through a cheaper tier than the search API the rule was written
+	// from, so the rule no longer describes how the tracker reads. Dropping it keeps the
+	// admin's "how this resolves" badge honest, and lets the tracker be re-detected from
+	// scratch — on a WooCommerce shop that means picking up its Store API endpoint.
+	if isSearchFallbackRuleType(extractor.RuleType(extractionRuleJSON)) && !isSearchFallbackRuleType(extractionMethod) {
+		pool.Exec(ctx, `UPDATE trackers SET extraction_rule = NULL, updated_at = now() WHERE id = $1`, id)
+		log.Info().
+			Str("tracker_id", id).
+			Str("resolved_by", extractionMethod).
+			Msg("cleared stale search-fallback rule after a cheaper method resolved the tracker")
+	}
 
 	pool.Exec(ctx, `
 		INSERT INTO stock_points (id, tracker_id, stock_status, source, status)
@@ -453,20 +620,32 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 		}
 		return product.Price, "", stock, "wildberries_price", fetchMethod, nil
 	}
-	if isSearchFallbackRuleType(ruleType) {
-		if searchFallback == nil {
-			return 0, "", "", "", "", fmt.Errorf("search fallback disabled for %s tracker", ruleType)
+	if ruleType == shops.WooCommerceMethod {
+		// Replay the endpoint resolved when the tracker was created. A failure here is not
+		// fatal: a shop can move off WooCommerce or restrict its Store API later, so fall
+		// through to the HTML tiers below rather than erroring the tracker out.
+		if apiURL := shops.WooStoreRuleAPIURL(extractionRuleJSON); apiURL != "" {
+			if price, currency, stock, fetchMethod, ok := wooCommerceStorePrice(fetcher, apiURL, url); ok {
+				return price, currency, stock, shops.WooCommerceMethod, fetchMethod, nil
+			}
 		}
-		result, err := searchFallback.Extract(nil, url)
-		if err != nil {
-			return 0, "", "", "", "", fmt.Errorf("search fallback extraction failed: %w", err)
-		}
-		if result == nil || len(result.Candidates) == 0 {
-			return 0, "", "", "", "", fmt.Errorf("search fallback did not find an exact URL price")
-		}
-		price, currency, stockStatus, extractionMethod, err := finalizePriceResult(result, fallbackCurrency, referencePrice)
-		return price, currency, stockStatus, extractionMethod, "", err
 	}
+
+	// A search-fallback rule records that the *first* resolution needed a search API. It
+	// deliberately does not short-circuit to one here, so this tracker still starts from
+	// the cheap tiers below on every check: the page fetch and the HTML/Store-API parsers
+	// are self-hosted, while two of the search tiers (Serper, SerpAPI) are metered.
+	//
+	// Pinning was worse than the fetch it saved. The search chain re-runs from the top
+	// each check and whichever tier answers first wins, so a pinned tracker silently
+	// changed method between checks — and on WooCommerce shops SerpAPI reports the
+	// minor-unit amount as the price, which reads as a 100x jump. Alternating tiers
+	// therefore produced a "price changed" notification every check, in both directions,
+	// forever. It also meant a tracker could never recover onto a cheaper method after a
+	// shop became readable again or a better extractor was added.
+	//
+	// Nothing is lost when the page really is unreachable: the fetch below fails and its
+	// error path falls through to the same search chain.
 
 	if ruleType == "zara_price" {
 		// Re-read the page's own lowest-displayed-price nodes fresh (see
@@ -526,6 +705,17 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 		return 0, "", "", "", "", fmt.Errorf("fetch failed: %w", err)
 	}
 
+	// A WooCommerce shop publishes the same price its page renders through its own Store
+	// API, already separated into an amount, a currency and an explicit stock flag. That
+	// removes the two guesses the HTML tiers have to make here — how to scale an ambiguous
+	// bare integer, and whether stray "unavailable" wording anywhere in the markup refers
+	// to this product — so prefer it whenever the page identifies itself as WooCommerce.
+	if apiURL, ok := shops.WooStoreProductsURL(shops.WPAPIRoot(body), url); ok && shops.IsWooCommercePage(body) {
+		if price, currency, stock, _, ok := wooCommerceStorePrice(fetcher, apiURL, url); ok {
+			return price, currency, stock, shops.WooCommerceMethod, fetchMethod, nil
+		}
+	}
+
 	result, err := attr.Extract(body, url)
 	if err != nil || len(result.Candidates) == 0 {
 		result, err = generic.Extract(body, url)
@@ -540,6 +730,73 @@ func extractTrackerPrice(ctx context.Context, rend *renderer.Renderer, fetcher *
 
 	price, currency, stockStatus, extractionMethod, err := finalizePriceResult(result, fallbackCurrency, referencePrice)
 	return price, currency, stockStatus, extractionMethod, fetchMethod, err
+}
+
+// wooCommerceStoreStock resolves availability from a shop's own Store API. It handles both
+// shapes the caller can be holding: a saved-rule tracker fetches the endpoint directly, so
+// body is already the API response, while an unscoped tracker still has the storefront HTML
+// and has to discover and call the endpoint first.
+//
+// Variant-scoped rules ("zara_size", "hm_size", ...) are deliberately left alone: they track
+// one size's availability, which a product-level is_in_stock flag would paper over.
+func wooCommerceStoreStock(fetcher *extractor.PageFetcher, ruleJSON, body []byte, pageURL string) (string, bool) {
+	ruleType := extractor.RuleType(ruleJSON)
+	if ruleType != "" && ruleType != shops.WooCommerceMethod {
+		return "", false
+	}
+	if shops.WooStoreRuleAPIURL(ruleJSON) != "" {
+		product, err := shops.ParseWooStoreProduct(body, pageURL)
+		if err != nil {
+			return "", false
+		}
+		return wooStockStatus(product), true
+	}
+	if fetcher == nil || !shops.IsWooCommercePage(body) {
+		return "", false
+	}
+	apiURL, ok := shops.WooStoreProductsURL(shops.WPAPIRoot(body), pageURL)
+	if !ok {
+		return "", false
+	}
+	apiBody, _, err := fetcher.Fetch(apiURL)
+	if err != nil {
+		return "", false
+	}
+	product, err := shops.ParseWooStoreProduct(apiBody, pageURL)
+	if err != nil {
+		return "", false
+	}
+	return wooStockStatus(product), true
+}
+
+func wooStockStatus(product shops.WooProduct) string {
+	if product.InStock {
+		return "in_stock"
+	}
+	return "out_of_stock"
+}
+
+// wooCommerceStorePrice reads one product from a WooCommerce Store API endpoint. It
+// reports ok=false rather than an error for every failure mode, because every caller has
+// a working path to fall back to; the API is an upgrade over parsing the HTML, never the
+// only way to read these shops.
+func wooCommerceStorePrice(fetcher *extractor.PageFetcher, apiURL, pageURL string) (price float64, currency, stockStatus, fetchMethod string, ok bool) {
+	if fetcher == nil {
+		return 0, "", "", "", false
+	}
+	body, fetchMethod, err := fetcher.Fetch(apiURL)
+	if err != nil {
+		return 0, "", "", "", false
+	}
+	product, err := shops.ParseWooStoreProduct(body, pageURL)
+	if err != nil || product.Price <= 0 {
+		return 0, "", "", "", false
+	}
+	stockStatus = "out_of_stock"
+	if product.InStock {
+		stockStatus = "in_stock"
+	}
+	return product.Price, product.Currency, stockStatus, fetchMethod, true
 }
 
 func isSearchFallbackRuleType(ruleType string) bool {

@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:www.zara.com)",
-      "WebFetch(domain:www2.hm.com)"
+      "WebFetch(domain:www2.hm.com)",
+      "WebFetch(domain:plugins.trac.wordpress.org)"
     ]
   }
 }

@@ -137,3 +137,51 @@ func TestBestPriceCandidatePrefersHighestConfidenceWhenNoReferenceMatches(t *tes
 		t.Fatalf("expected highest-confidence price 199, got %v", price)
 	}
 }
+
+func TestIsSearchFallbackRuleTypeCoversEveryTier(t *testing.T) {
+	// Every tier in extractor.NewSearchFallback's chain must be recognised here: the rule
+	// type is what tells the worker a tracker's stored rule came from a search API rather
+	// than from reading the page, and a missed one would leave that tracker's stale rule
+	// in place forever.
+	for _, ruleType := range []string{
+		"openserp_search_result", "openserp_extract", "searxng_exact_offer",
+		"serper_organic_result", "serper_shopping_result", "serpapi_rich_snippet",
+		"gemini_url_context",
+	} {
+		if !isSearchFallbackRuleType(ruleType) {
+			t.Errorf("%s must be recognised as a search-fallback rule type", ruleType)
+		}
+	}
+	// Methods that read the page (or the shop's own API) directly must not be.
+	for _, ruleType := range []string{
+		"json_ld", "css_text", "dom_attribute", "woocommerce_store_api",
+		"wildberries_price", "zara_price", "",
+	} {
+		if isSearchFallbackRuleType(ruleType) {
+			t.Errorf("%s must not be treated as a search-fallback rule type", ruleType)
+		}
+	}
+}
+
+func TestStaleSearchFallbackRuleIsClearedOnlyWhenResolvedCheaper(t *testing.T) {
+	// Mirrors the condition in processTracker: the stored rule is dropped once a cheaper
+	// tier resolves the tracker, and left alone while a search tier is still what works.
+	shouldClear := func(stored, resolved string) bool {
+		return isSearchFallbackRuleType(stored) && !isSearchFallbackRuleType(resolved)
+	}
+	cases := []struct {
+		stored, resolved string
+		want             bool
+	}{
+		{"openserp_extract", "woocommerce_store_api", true},
+		{"serpapi_rich_snippet", "json_ld", true},
+		{"openserp_extract", "serpapi_rich_snippet", false}, // still only search works
+		{"css_text", "json_ld", false},                      // never was a search tracker
+		{"", "woocommerce_store_api", false},
+	}
+	for _, tc := range cases {
+		if got := shouldClear(tc.stored, tc.resolved); got != tc.want {
+			t.Errorf("stored=%q resolved=%q: clear=%v, want %v", tc.stored, tc.resolved, got, tc.want)
+		}
+	}
+}

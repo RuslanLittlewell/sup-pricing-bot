@@ -27,6 +27,7 @@ var notifierTexts = map[string]map[string]string{
 		"extraction_failed":   "⚠️ Price check failed\n\nProduct: %s\nCould not extract the price. The site may have changed.\n\nOpen product:\n%s",
 		"manual_check_price":  "✅ Check finished\n\nProduct: %s\nPrice unchanged: %s\n\nOpen product:\n%s",
 		"manual_check_stock":  "✅ Check finished\n\nProduct: %s\nStock status unchanged: %s\n\nOpen product:\n%s",
+		"trial_expired":       "⏳ Your trial has ended\n\nYou're back on the Free plan, so this tracker was stopped and moved to your history:\n\nProduct: %s\n\nOpen product:\n%s",
 		"unknown":             "unknown",
 		"stock_in":            "in stock",
 		"stock_out":           "out of stock",
@@ -41,6 +42,7 @@ var notifierTexts = map[string]map[string]string{
 		"extraction_failed":   "⚠️ Ошибка проверки цены\n\nТовар: %s\nНе удалось извлечь цену. Возможно, сайт изменился.\n\nОткрыть товар:\n%s",
 		"manual_check_price":  "✅ Проверка завершена\n\nТовар: %s\nЦена не изменилась: %s\n\nОткрыть товар:\n%s",
 		"manual_check_stock":  "✅ Проверка завершена\n\nТовар: %s\nНаличие не изменилось: %s\n\nОткрыть товар:\n%s",
+		"trial_expired":       "⏳ Пробный период закончился\n\nВы вернулись на тариф Free, поэтому этот трекер остановлен и перенесён в историю:\n\nТовар: %s\n\nОткрыть товар:\n%s",
 		"unknown":             "неизвестно",
 		"stock_in":            "в наличии",
 		"stock_out":           "нет в наличии",
@@ -55,6 +57,7 @@ var notifierTexts = map[string]map[string]string{
 		"extraction_failed":   "⚠️ Błąd sprawdzania ceny\n\nProdukt: %s\nNie udało się pobrać ceny. Strona mogła się zmienić.\n\nOtwórz produkt:\n%s",
 		"manual_check_price":  "✅ Sprawdzanie zakończone\n\nProdukt: %s\nCena bez zmian: %s\n\nOtwórz produkt:\n%s",
 		"manual_check_stock":  "✅ Sprawdzanie zakończone\n\nProdukt: %s\nDostępność bez zmian: %s\n\nOtwórz produkt:\n%s",
+		"trial_expired":       "⏳ Okres próbny się zakończył\n\nWracasz na plan Free, więc ten tracker został zatrzymany i przeniesiony do historii:\n\nProdukt: %s\n\nOtwórz produkt:\n%s",
 		"unknown":             "nieznany",
 		"stock_in":            "dostępny",
 		"stock_out":           "niedostępny",
@@ -202,6 +205,11 @@ func (n *Notifier) send(ctx context.Context, id, notifType, trackerID string, ti
 			}
 			text = fmt.Sprintf(nt(lang, "manual_check_stock"), displayTitle, statusStr, url)
 		}
+
+	case "trial_expired":
+		// No "stop tracking" button below for this type: the tracker is already stopped,
+		// which is precisely what this message is telling the user.
+		text = fmt.Sprintf(nt(lang, "trial_expired"), displayTitle, url)
 
 	default:
 		n.log.Warn().Str("type", notifType).Msg("unknown notification type")

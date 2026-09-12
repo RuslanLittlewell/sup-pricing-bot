@@ -3,6 +3,7 @@ package extractor
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/littlewell/price-tracker/internal/shops"
@@ -83,13 +84,32 @@ const minStockBodyBytes = 512
 // otherwise — since the absence of an out-of-stock phrase on a substantive page is our only
 // available in-stock signal.
 func DetectStockStatusFromText(htmlContent []byte) string {
-	if ContainsOutOfStockPhrase(string(htmlContent)) {
+	if ContainsOutOfStockPhrase(string(stripInertMarkup(htmlContent))) {
 		return "out_of_stock"
 	}
+	// Deliberately measured on the original body: the point of this floor is to catch a
+	// truncated or empty fetch, and stripping inert markup out of a real page could
+	// otherwise push it under the threshold and report "unknown" for a page we did read.
 	if len(strings.TrimSpace(string(htmlContent))) < minStockBodyBytes {
 		return "unknown"
 	}
 	return "in_stock"
+}
+
+// inertMarkupRe matches script/template blocks that hold unrendered client-side templates
+// rather than page content. Their bodies are boilerplate that ships on every page of a
+// store regardless of its actual stock: WooCommerce, for one, embeds
+// <script type="text/template" id="tmpl-unavailable-variation-template"> containing
+// "Sorry, this product is unavailable" on every product page it renders, which the phrase
+// scan otherwise reads as a positive out-of-stock signal for an in-stock item.
+//
+// Only types the browser never renders as-is are stripped. Ordinary <script> bodies are
+// left alone on purpose — on SPA-ish storefronts the embedded JSON state is sometimes the
+// only place a genuine stock signal appears at all.
+var inertMarkupRe = regexp.MustCompile(`(?is)<script[^>]*\stype\s*=\s*["'](?:text/template|text/x-template|text/html)["'][^>]*>.*?</script>|<template\b[^>]*>.*?</template>`)
+
+func stripInertMarkup(htmlContent []byte) []byte {
+	return inertMarkupRe.ReplaceAll(htmlContent, []byte(" "))
 }
 
 // ContainsOutOfStockPhrase does the same case-insensitive phrase match as

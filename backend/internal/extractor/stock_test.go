@@ -194,3 +194,47 @@ func TestDetectStockStatusNikeSize(t *testing.T) {
 		t.Fatalf("got %s/%s", status, method)
 	}
 }
+
+func TestDetectStockStatusIgnoresInertVariationTemplate(t *testing.T) {
+	// WooCommerce ships this template on every product page, in stock or not. Scanning it
+	// reported an available item as out_of_stock — confirmed against supermaluch.com.
+	body := []byte(`<html><body><div class="product">
+<p class="price">5 896,00 zł</p>
+<button class="single_add_to_cart_button">Dodaj do koszyka</button>
+<script type="text/template" id="tmpl-unavailable-variation-template">
+	<p role="alert">Przepraszamy, ten produkt jest niedostępny. Prosimy wybrać inną kombinację.</p>
+</script>
+<template id="tmpl-wvs-unavailable"><p>Sorry, this product is unavailable.</p></template>
+<div class="description">Wózek modułowy Anex Modu w konfiguracji dwie gondole i dwie
+spacerówki to wszechstronny zestaw dla rodziców, którzy potrzebują pełnej elastyczności
+podczas codziennych spacerów. Zestaw oferuje możliwość korzystania z dwóch różnych
+modułów naprzemiennie, w zależności od aktualnych potrzeb dziecka lub dzieci. Wysyłka
+w ciągu 24 godzin, darmowa dostawa oraz dwuletnia gwarancja producenta.</div>
+</div></body></html>`)
+
+	if got := DetectStockStatusFromText(body); got != "in_stock" {
+		t.Fatalf("status = %q, want in_stock (inert templates must not count)", got)
+	}
+}
+
+func TestDetectStockStatusStillReadsRealOutOfStockWording(t *testing.T) {
+	// The strip must not swallow a genuine signal that lives in ordinary page markup.
+	body := []byte(`<html><body><div class="product">
+<p class="stock out-of-stock">Brak w magazynie</p>
+<script type="text/template" id="tmpl-unavailable-variation-template"><p>unavailable</p></script>
+</div></body></html>`)
+
+	if got := DetectStockStatusFromText(body); got != "out_of_stock" {
+		t.Fatalf("status = %q, want out_of_stock", got)
+	}
+}
+
+func TestDetectStockStatusKeepsOrdinaryScriptState(t *testing.T) {
+	// Plain <script> bodies are left intact on purpose: on SPA-ish storefronts the embedded
+	// JSON state is sometimes the only place availability appears at all.
+	body := []byte(`<html><body><script>window.__STATE__={"availability":"out of stock"}</script></body></html>`)
+
+	if got := DetectStockStatusFromText(body); got != "out_of_stock" {
+		t.Fatalf("status = %q, want out_of_stock", got)
+	}
+}
