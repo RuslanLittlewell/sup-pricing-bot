@@ -24,6 +24,8 @@ type Config struct {
 	CORSOrigin string
 
 	TributeAPIKey              string
+	TributeDigitalAPIKey       string
+	TributeDigitalWebhookURL   string
 	TributeBasicSubscriptionID int64
 	TributeProSubscriptionID   int64
 }
@@ -47,6 +49,8 @@ func Load() *Config {
 		CORSOrigin:      getEnv("CORS_ORIGIN", "http://localhost:3000"),
 
 		TributeAPIKey:              getEnv("TRIBUTE_API_KEY", ""),
+		TributeDigitalAPIKey:       getEnv("TRIBUTE_DIGITAL_API_KEY", ""),
+		TributeDigitalWebhookURL:   getEnv("TRIBUTE_DIGITAL_WEBHOOK_URL", ""),
 		TributeBasicSubscriptionID: getEnvInt64("TRIBUTE_BASIC_SUBSCRIPTION_ID", 0),
 		TributeProSubscriptionID:   getEnvInt64("TRIBUTE_PRO_SUBSCRIPTION_ID", 0),
 	}

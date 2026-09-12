@@ -332,15 +332,20 @@ func handleTelegramCallback(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		createSizeTracker(ctx, pool, tg, chatID, userID, lang, state.URL, state.Title, selection, selection.Variants[idx], log)
 	case data == "candidate:yes":
 		state, ok := getTelegramState(ctx, pool, chatID)
-		if !ok || state.Step != "awaiting_confirm" {
+		if !ok || (state.Step != "awaiting_confirm" && state.Step != "awaiting_found_price_confirm") {
 			sendMainMenu(tg, chatID, lang, tr(lang, "menu_stale"))
 			return
 		}
 		createTrackerFromState(ctx, pool, tg, chatID, userID, lang, state, log)
 	case data == "candidate:no":
 		state, ok := getTelegramState(ctx, pool, chatID)
-		if !ok || state.Step != "awaiting_confirm" {
+		if !ok || (state.Step != "awaiting_confirm" && state.Step != "awaiting_found_price_confirm") {
 			sendMainMenu(tg, chatID, lang, tr(lang, "menu_stale"))
+			return
+		}
+		if state.Step == "awaiting_found_price_confirm" {
+			clearTelegramState(ctx, pool, chatID)
+			sendMainMenu(tg, chatID, lang, tr(lang, "menu_back"))
 			return
 		}
 		sendNextPriceCandidate(ctx, pool, tg, chatID, userID, lang, state.URL, state.InitialPrice, state.Currency, state.CandidateIndex+1, log, rend,

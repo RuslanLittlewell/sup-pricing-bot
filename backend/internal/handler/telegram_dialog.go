@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"math"
 	neturl "net/url"
 	"strings"
@@ -122,7 +123,7 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 		sendNextPriceCandidate(ctx, pool, tg, chatID, userID, lang, state.URL, price, currency, 0, log, rend,
 			extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy, proxypool.NewStore(pool)))
 		return true
-	case "awaiting_confirm":
+	case "awaiting_confirm", "awaiting_found_price_confirm":
 		switch lowered {
 		case "да", "yes", "y", "+", "ок", "ok", "tak":
 			log.Info().
@@ -139,6 +140,11 @@ func handleTrackerDialog(ctx context.Context, pool *pgxpool.Pool, tg *telegram.C
 			createTrackerFromState(ctx, pool, tg, chatID, userID, lang, state, log)
 			return true
 		case "нет", "no", "n", "-", "дальше", "nie":
+			if state.Step == "awaiting_found_price_confirm" {
+				clearTelegramState(ctx, pool, chatID)
+				sendMainMenu(tg, chatID, lang, tr(lang, "menu_back"))
+				return true
+			}
 			log.Info().
 				Int64("telegram_id", chatID).
 				Str("url", state.URL).
@@ -330,9 +336,8 @@ func sendScanExhaustedApology(ctx context.Context, pool *pgxpool.Pool, tg *teleg
 }
 
 // sendTextPriceCandidate is the no-screenshot fallback for sendNextPriceCandidate. It
-// creates a tracker only when the fallback found the same requested URL and the exact
-// price the user entered. Ambiguous search results are logged and declined without
-// asking the user to approve a potentially unrelated price.
+// creates a tracker when the price matches the user input, or asks the user to
+// confirm a different price from the requested page. Unrelated results are declined.
 func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency string, log zerolog.Logger, fetcher *extractor.PageFetcher, statusMsgID int) bool {
 	if fetcher == nil {
 		return false
@@ -376,7 +381,16 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 		notifyStillSearching(tg, chatID, statusMsgID, lang)
 		fbResult, fbErr := extractWithTimeout(fallback, body, url, 40*time.Second)
 		if fbErr == nil && len(fbResult.Candidates) > 0 {
+			if tryCreateTrackerFromCandidates(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, fetchMethod, fbResult, directErr, log) {
+				return true
+			}
+			if offerFoundPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, fallbackCurrency, direct, log) {
+				return true
+			}
 			return handleTextPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, fetchMethod, fbResult, directErr, log)
+		}
+		if offerFoundPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, fallbackCurrency, direct, log) {
+			return true
 		}
 		if sendScanExhaustedApology(ctx, pool, tg, chatID, userID, lang, url, fbErr, log) {
 			return true
@@ -531,9 +545,69 @@ func tryCreateTrackerFromCandidates(ctx context.Context, pool *pgxpool.Pool, tg 
 	return false
 }
 
+// foundPriceState only offers usable prices belonging to the requested product page.
+// Search results must explicitly identify that page; direct extraction may omit it.
+func foundPriceState(url, fallbackCurrency string, result *extractor.ExtractionResult) (telegramState, bool) {
+	if result == nil {
+		return telegramState{}, false
+	}
+	for _, candidate := range result.Candidates {
+		if extractor.RuleType(candidate.Rule) == "" ||
+			(candidate.SourceURL != "" && !extractor.SameURL(candidate.SourceURL, url)) ||
+			(isSearchFallbackRule(candidate.Rule) && candidate.SourceURL == "") {
+			continue
+		}
+		price, _, ok := parsePriceInput(candidate.Price)
+		if !ok || math.IsInf(price, 0) || math.IsNaN(price) {
+			continue
+		}
+		price = normalizePricePrecision(price)
+		if price <= 0 {
+			continue
+		}
+		currency := candidate.Currency
+		if currency == "" {
+			currency = fallbackCurrency
+		}
+		return telegramState{Step: "awaiting_found_price_confirm", URL: url, Title: result.Title,
+			InitialPrice: price, Currency: currency, Rule: candidate.Rule}, true
+	}
+	return telegramState{}, false
+}
+
+func offerFoundPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url, fallbackCurrency string, result *extractor.ExtractionResult, log zerolog.Logger) bool {
+	state, ok := foundPriceState(url, fallbackCurrency, result)
+	if !ok {
+		return false
+	}
+	_, err := pool.Exec(ctx, `
+		INSERT INTO telegram_states (telegram_id, user_id, step, url, title, initial_price, currency, candidate_index, rule)
+		VALUES ($1, $2, 'awaiting_found_price_confirm', $3, $4, $5, $6, 0, $7)
+		ON CONFLICT (telegram_id) DO UPDATE
+		SET user_id = $2, step = 'awaiting_found_price_confirm', url = $3, title = $4,
+		    initial_price = $5, currency = $6, candidate_index = 0, rule = $7, updated_at = now()
+	`, chatID, userID, state.URL, state.Title, state.InitialPrice, state.Currency, state.Rule)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to save found price confirmation")
+		SendTelegramMessage(tg, chatID, tr(lang, "save_candidate_failed"))
+		return true
+	}
+	markup := makeInlineKeyboard(
+		[]inlineButton{button(tr(lang, "button_yes"), "candidate:yes"), button(tr(lang, "button_no"), "candidate:no")},
+		[]inlineButton{button(tr(lang, "button_back"), "menu:back")},
+	)
+	if err := tg.SendMessageWithMarkup(chatID, fmt.Sprintf(tr(lang, "found_price_confirm"), state.InitialPrice, html.EscapeString(state.Currency)), markup); err != nil {
+		log.Error().Err(err).Msg("failed to send found price confirmation")
+	}
+	return true
+}
+
 // rejectTextPriceCandidate records why no candidate was exact enough and tells the
-// user the site was noted as protected, clearing the dialog state.
+// user the site was noted as protected only if no usable price can be offered.
 func rejectTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegram.Client, chatID int64, userID, lang, url string, expectedPrice float64, fallbackCurrency string, result *extractor.ExtractionResult, directErr string, log zerolog.Logger) {
+	if offerFoundPriceCandidate(ctx, pool, tg, chatID, userID, lang, url, fallbackCurrency, result, log) {
+		return
+	}
 	candidate := result.Candidates[0]
 	price, _, _ := parsePriceInput(candidate.Price)
 	currency := candidate.Currency
