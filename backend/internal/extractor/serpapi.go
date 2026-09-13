@@ -208,6 +208,8 @@ func normalizeCurrencySymbol(symbol string) string {
 		return "EUR"
 	case "£", "GBP":
 		return "GBP"
+	case "₽", "RUB":
+		return "RUB"
 	default:
 		return symbol
 	}

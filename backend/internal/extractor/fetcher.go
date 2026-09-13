@@ -424,6 +424,8 @@ func isBotChallenge(body []byte) bool {
 	s := string(body)
 	lower := strings.ToLower(s)
 	indicators := []string{
+		// DNS-Shop's Qrator response contains only a JS challenge, even after rendering.
+		`/__qrator/qauth_`,
 		`/_sec/verify`,
 		`bm-verify`,
 		`checking your browser`,
@@ -486,6 +488,8 @@ func shouldRenderFallback(err error) bool {
 		"context deadline exceeded",
 		"Client.Timeout exceeded",
 		"timeout awaiting response headers",
+		// DNS-Shop uses 401 for its Qrator challenge on public product pages.
+		"unexpected status code: 401",
 		"unexpected status code: 403",
 		"unexpected status code: 429",
 		"unexpected status code: 503",

@@ -143,8 +143,8 @@ run_remote "if ! docker compose version >/dev/null 2>&1 && ! command -v docker-c
   (apt-get install -y docker-compose-plugin || apt-get install -y docker-compose-v2 || apt-get install -y docker-compose); \
 fi"
 
-echo "Starting containers..."
-run_remote "cd '${DEPLOY_DIR}' && set -a && . ./.env.production && set +a && export COMPOSE_FILE=deploy/docker-compose.prod.yml && if docker compose version >/dev/null 2>&1; then compose_cmd='docker compose'; elif command -v docker-compose >/dev/null 2>&1; then compose_cmd='docker-compose'; elif command -v docker-compose-v2 >/dev/null 2>&1; then compose_cmd='docker-compose-v2'; else echo 'Docker Compose is not installed. Install docker-compose-plugin, docker-compose-v2, or docker-compose.' >&2; exit 1; fi; \$compose_cmd up -d --build"
+echo "Building services sequentially, then starting containers..."
+run_remote "cd '${DEPLOY_DIR}' && set -a && . ./.env.production && set +a && export COMPOSE_FILE=deploy/docker-compose.prod.yml && if docker compose version >/dev/null 2>&1; then compose_cmd='docker compose'; elif command -v docker-compose >/dev/null 2>&1; then compose_cmd='docker-compose'; elif command -v docker-compose-v2 >/dev/null 2>&1; then compose_cmd='docker-compose-v2'; else echo 'Docker Compose is not installed. Install docker-compose-plugin, docker-compose-v2, or docker-compose.' >&2; exit 1; fi; for service in curl-cffi firefox-renderer backend worker frontend; do \$compose_cmd build \$service || exit 1; done; \$compose_cmd up -d --no-build"
 
 echo "Container status:"
 run_remote "cd '${DEPLOY_DIR}' && set -a && . ./.env.production && set +a && export COMPOSE_FILE=deploy/docker-compose.prod.yml && if docker compose version >/dev/null 2>&1; then compose_cmd='docker compose'; elif command -v docker-compose >/dev/null 2>&1; then compose_cmd='docker-compose'; elif command -v docker-compose-v2 >/dev/null 2>&1; then compose_cmd='docker-compose-v2'; else echo 'Docker Compose is not installed. Install docker-compose-plugin, docker-compose-v2, or docker-compose.' >&2; exit 1; fi; \$compose_cmd ps"

@@ -365,6 +365,9 @@ func sendTextPriceCandidate(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 	var direct *extractor.ExtractionResult
 	directErr := "screenshot price block not found"
 	if err == nil && len(result.Candidates) > 0 {
+		// The page's own currency must win over the one guessed from the user's input
+		// (PLN by default), or a found EUR price would be offered as PLN.
+		extractor.FillMissingCurrency(result, body)
 		direct = result
 		if tryCreateTrackerFromCandidates(ctx, pool, tg, chatID, userID, lang, url, expectedPrice, fallbackCurrency, fetchMethod, direct, directErr, log) {
 			return true
@@ -481,7 +484,7 @@ func tryAcceptCeneoMinPrice(ctx context.Context, pool *pgxpool.Pool, tg *telegra
 			Str("currency", currency).
 			Str("method", extractor.RuleType(candidate.Rule)).
 			Msg("telegram ceneo minimum price accepted")
-		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "aggregator_min_price_created"), price, expectedPrice))
+		SendTelegramMessage(tg, chatID, fmt.Sprintf(tr(lang, "aggregator_min_price_created"), price, html.EscapeString(currency), expectedPrice))
 		createTrackerFromState(ctx, pool, tg, chatID, userID, lang, telegramState{
 			URL:          url,
 			Title:        result.Title,
