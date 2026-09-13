@@ -183,6 +183,24 @@ func TestDetectStockStatusWildberriesAPI(t *testing.T) {
 	}
 }
 
+func TestDetectStockStatusEtisalatSkuAPI(t *testing.T) {
+	rule := []byte(`{"type":"etisalat_stock"}`)
+	status, method, err := DetectStockStatus(rule, []byte(`{"skuId":"bgskuTrans4120911950","displayName":"PlayStation PS5 PRO standalone Console","inStock":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "out_of_stock" || method != "etisalat_sku_api" {
+		t.Fatalf("got %s/%s", status, method)
+	}
+
+	// The eShop product page is an AngularJS shell with no stock wording; it must fail the
+	// lookup instead of reading as in_stock.
+	shell := []byte(`<!DOCTYPE html><html ng-app="app"><head><title>Get your favorite Gaming with smart payment plans by e&amp;.</title></head><body>` + strings.Repeat("<div ng-view></div>", 50) + `</body></html>`)
+	if status, _, err := DetectStockStatus(rule, shell); err == nil {
+		t.Fatalf("expected an error for the page shell, got %s", status)
+	}
+}
+
 func TestDetectStockStatusNikeSize(t *testing.T) {
 	rule := []byte(`{"type":"nike_size","size":"EU 42","gtin":"gtin-42"}`)
 	body := []byte(`{"objects":[{"gtin":"gtin-42","method":"SHIP","available":true}]}`)

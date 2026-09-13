@@ -1,6 +1,9 @@
 package extractor
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestUsableBodyRejectsHMSoftBlock(t *testing.T) {
 	body := []byte(`<html><head><title>Access Denied</title></head><body>
@@ -59,5 +62,27 @@ func TestIsBotChallengeAllowsOrdinaryPageMentioningWordfence(t *testing.T) {
 
 	if isBotChallenge(body) {
 		t.Fatal("a page merely mentioning Wordfence must not be treated as a block")
+	}
+}
+
+func TestShouldRenderFallbackHTTP401(t *testing.T) {
+	if !shouldRenderFallback(errors.New("unexpected status code: 401")) {
+		t.Fatal("HTTP 401 on a public product page must allow fallback loading")
+	}
+	if shouldRenderFallback(errors.New("utls dial: blocked dial to 127.0.0.1; unexpected status code: 401")) {
+		t.Fatal("SSRF rejection must remain non-retryable")
+	}
+	if shouldRenderFallback(errors.New("unexpected status code: 404")) {
+		t.Fatal("missing products must not trigger fallback loading")
+	}
+}
+
+func TestIsBotChallengeDetectsQrator(t *testing.T) {
+	body := []byte(`<html><script src="/__qrator/qauth_utm_v2d_v9118.js" charset="utf-8"></script></html>`)
+	if !isBotChallenge(body) {
+		t.Fatal("Qrator's JavaScript challenge must not be accepted as a product page")
+	}
+	if isBotChallenge([]byte(`<html><body>Our shop uses Qrator protection</body></html>`)) {
+		t.Fatal("a plain mention of Qrator is not a challenge")
 	}
 }

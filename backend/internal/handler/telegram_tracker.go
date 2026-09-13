@@ -149,6 +149,17 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 		extractionRule, _ = json.Marshal(map[string]string{"type": "wildberries_stock", "article": shops.WildberriesArticle(url)})
 		stockMethod = "wildberries_api"
 	}
+	if shops.IsEtisalatURL(url) {
+		apiURL, apiErr := shops.EtisalatSkuAPIURL(url)
+		if apiErr != nil {
+			SendTelegramMessage(tg, chatID, tr(lang, "price_not_found"))
+			clearTelegramState(ctx, pool, chatID)
+			return
+		}
+		fetchURL = apiURL
+		extractionRule, _ = json.Marshal(map[string]string{"type": "etisalat_stock"})
+		stockMethod = shops.EtisalatStockMethod
+	}
 	body, fetchMethod, err := fetcher.Fetch(fetchURL)
 	if err != nil {
 		log.Error().Err(err).Str("url", url).Msg("failed to fetch page for stock tracker")
@@ -183,6 +194,20 @@ func createStockTrackerFromURL(ctx context.Context, pool *pgxpool.Pool, tg *tele
 			stockStatus = "in_stock"
 		} else {
 			stockStatus = "out_of_stock"
+		}
+	}
+	if shops.IsEtisalatURL(url) {
+		sku, parseErr := shops.ParseEtisalatSku(body)
+		if parseErr != nil {
+			log.Warn().Err(parseErr).Str("url", url).Msg("etisalat SKU lookup failed; refusing to create tracker")
+			SendTelegramMessage(tg, chatID, tr(lang, "price_not_found"))
+			clearTelegramState(ctx, pool, chatID)
+			return
+		}
+		title = sku.DisplayName
+		stockStatus = "out_of_stock"
+		if sku.InStock {
+			stockStatus = "in_stock"
 		}
 	}
 

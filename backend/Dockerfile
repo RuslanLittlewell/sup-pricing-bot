@@ -1,6 +1,6 @@
 FROM golang:1.26-alpine AS builder
 
-RUN apk add --no-cache git ca-certificates chromium nss freetype harfbuzz
+RUN apk add --no-cache git ca-certificates
 
 WORKDIR /app
 
@@ -16,8 +16,10 @@ RUN git clone https://github.com/scrapfly/Antibot-Detector.git /opt/antibot-dete
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/api ./cmd/api
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/worker ./cmd/worker
+# Limit compilation parallelism on the small VPS and keep compiler cache out of layers.
+RUN GOMAXPROCS=2 CGO_ENABLED=0 GOOS=linux go build -p 2 -o /app/api ./cmd/api \
+    && GOMAXPROCS=2 CGO_ENABLED=0 GOOS=linux go build -p 2 -o /app/worker ./cmd/worker \
+    && rm -rf /root/.cache/go-build
 
 FROM alpine:3.23
 

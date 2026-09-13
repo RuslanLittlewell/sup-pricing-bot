@@ -357,8 +357,22 @@ func processStockTracker(ctx context.Context, pool *pgxpool.Pool, fetcher *extra
 
 	log.Info().Str("tracker_id", id).Str("url", url).Msg("checking stock tracker")
 
+	// Etisalat stock trackers created before the SKU API was used carry no rule; their page
+	// is a client-rendered shell the keyword scan misreads as in_stock.
+	if extractor.RuleType(extractionRuleJSON) == "" && shops.IsEtisalatURL(url) {
+		extractionRuleJSON = []byte(`{"type":"etisalat_stock"}`)
+	}
+
 	fetchURL := url
-	if extractor.RuleType(extractionRuleJSON) == "wildberries_stock" {
+	if extractor.RuleType(extractionRuleJSON) == "etisalat_stock" {
+		apiURL, apiErr := shops.EtisalatSkuAPIURL(url)
+		if apiErr != nil {
+			log.Error().Err(apiErr).Str("tracker_id", id).Msg("stock detection failed")
+			handleExtractionError(ctx, pool, id, apiErr.Error(), consecutiveErrors, checkInterval, manualCheck, log)
+			return
+		}
+		fetchURL = apiURL
+	} else if extractor.RuleType(extractionRuleJSON) == "wildberries_stock" {
 		if apiURL, apiErr := shops.WildberriesAPIURL(url); apiErr == nil {
 			fetchURL = apiURL
 		}

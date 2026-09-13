@@ -195,6 +195,16 @@ func DetectStockStatus(extractionRuleJSON []byte, body []byte) (status, method s
 			}
 			return "out_of_stock", "wildberries_api", nil
 		}
+		if jsonErr := json.Unmarshal(extractionRuleJSON, &rule); jsonErr == nil && rule.Type == "etisalat_stock" {
+			sku, eerr := shops.ParseEtisalatSku(body)
+			if eerr != nil {
+				return "", "", fmt.Errorf("etisalat stock lookup failed: %w", eerr)
+			}
+			if sku.InStock {
+				return "in_stock", shops.EtisalatStockMethod, nil
+			}
+			return "out_of_stock", shops.EtisalatStockMethod, nil
+		}
 		if jsonErr := json.Unmarshal(extractionRuleJSON, &rule); jsonErr == nil && rule.Type == "hm_size" {
 			variants, herr := shops.ParseHMSizes(body)
 			if herr != nil {
