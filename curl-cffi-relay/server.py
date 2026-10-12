@@ -52,6 +52,11 @@ class Handler(BaseHTTPRequestHandler):
             headers = {str(k): str(v) for k, v in headers.items() if str(k).lower() not in {"host", "content-length"}}
             proxy = str(payload.get("proxy", "")).strip()
             proxies = {"http": proxy, "https": proxy} if proxy else None
+            # The caller may shorten the budget (e.g. for slow public proxies), never extend it.
+            timeout = TIMEOUT
+            requested = payload.get("timeout")
+            if isinstance(requested, (int, float)) and 0 < requested < TIMEOUT:
+                timeout = requested
 
             session = requests.Session()
             current = target
@@ -62,7 +67,7 @@ class Handler(BaseHTTPRequestHandler):
                     headers=headers,
                     proxies=proxies,
                     impersonate="chrome",
-                    timeout=TIMEOUT,
+                    timeout=timeout,
                     allow_redirects=False,
                     stream=True,
                 )

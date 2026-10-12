@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/littlewell/price-tracker/internal/useragent"
 )
 
 const cfRelayTimeout = 20 * time.Second
@@ -56,6 +58,10 @@ func (f *CloudflareRelayFetcher) Fetch(targetURL string) ([]byte, error) {
 		return nil, fmt.Errorf("build relay request: %w", err)
 	}
 	req.Header.Set("X-Relay-Token", f.token)
+	// Without these the worker falls back to its hardcoded Chrome/124 UA and en-US, which
+	// both looks stale and pulls the English/geo-redirected variant of Polish storefronts.
+	req.Header.Set("X-Relay-User-Agent", useragent.Random().UserAgent)
+	req.Header.Set("X-Relay-Accept-Language", "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7")
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {

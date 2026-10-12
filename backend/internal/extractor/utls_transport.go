@@ -27,8 +27,11 @@ import (
 // browser would. Properly multiplexing HTTP/2 over a uTLS connection requires reaching
 // into unexported net/http internals to hook the TLSNextProto upgrade path; doing that
 // naively risks a broken connection (ALPN says h2, we speak h1 framing) which is worse
-// than just not offering h2. The TLS layer fingerprint — the part actually being
-// checked — is unaffected by this.
+// than just not offering h2. This is not free: JA4 encodes the offered ALPN, and Akamai/
+// Cloudflare also fingerprint the h2 SETTINGS frame, so a "Chrome" that only speaks
+// HTTP/1.1 is itself a bot signal. Sites that check this are what the curl-cffi tier
+// (real h2 impersonation) is for. HelloChrome_Auto also lags the UA pool's Chrome
+// versions (see useragent.chromeVersions), another TLS-vs-UA mismatch.
 func newUTLSRoundTripper(proxyURL *url.URL) http.RoundTripper {
 	// The direct dialer validates the resolved IP (SSRF guard) right before connecting;
 	// the proxy dialer must not, since the operator's proxy may itself be a private/

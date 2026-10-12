@@ -14,7 +14,7 @@ set -euo pipefail
 # Kept in sync with deploy/deploy.sh's VPS_HOST default, and overridable the same way —
 # this used to hardcode a since-retired address, which fails as a connection timeout
 # rather than anything that points at the real cause.
-PROD_HOST="root@${VPS_HOST:-87.120.196.46}"
+PROD_HOST="root@${VPS_HOST:-191.44.114.212}"
 PROD_DB_CONTAINER="deploy-db-1"
 LOCAL_DB_CONTAINER="price-checker-bot-db-1"
 

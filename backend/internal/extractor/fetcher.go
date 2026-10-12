@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"time"
@@ -25,12 +26,11 @@ const (
 )
 
 // errBotBlocked means the page was reached but the response is a bot-detection block/
-// challenge page (Akamai, DataDome, Cloudflare, ...), not the real content — including
-// after falling back to the headless renderer. We deliberately don't escalate further
-// (TLS/fingerprint tricks, proxy rotation) when this happens; the site is telling us,
-// unambiguously, that it doesn't want automated access to this page. Surfacing this as
-// a distinct, honest error lets callers tell the user "this site blocks bots" instead of
-// a misleading "price not found" after silently feeding block-page HTML to the extractor.
+// challenge page (Akamai, DataDome, Cloudflare, ...), not the real content — after every
+// fetch tier (direct uTLS with proxy rotation, curl-cffi, the relay, the headless
+// renderer) has been tried. Surfacing this as a distinct, honest error lets callers tell
+// the user "this site blocks bots" instead of a misleading "price not found" after
+// silently feeding block-page HTML to the extractor.
 var errBotBlocked = errors.New("page is blocked by anti-bot protection")
 
 // Fetch method labels — which tier actually produced the page body, independent of
@@ -52,8 +52,17 @@ type PageFetcher struct {
 	cfRelay    *CloudflareRelayFetcher
 	curlCFFI   *CurlCFFIFetcher
 	firefox    *FirefoxFetcher
-	proxies    *proxypool.Store
+	proxies    proxyPool
 	proxyURL   string
+}
+
+// proxyPool is the part of proxypool.Store the fetcher uses.
+type proxyPool interface {
+	GetFingerprint(ctx context.Context, url string) (proxypool.FetchFingerprint, bool)
+	SaveFingerprint(ctx context.Context, url string, fp proxypool.FetchFingerprint) error
+	PickNonResidential(ctx context.Context) (proxypool.PickedProxy, bool)
+	PickResidentialForURL(ctx context.Context, rawURL string) (proxypool.PickedProxy, bool)
+	RotateResidentialSession(rawURL string)
 }
 
 // NewPageFetcher builds a fetcher. proxies may be nil (no pool wired up) — direct fetches
@@ -67,6 +76,12 @@ func NewPageFetcher(r *renderer.Renderer, cookiesFile, proxyURL string, proxies 
 		if parsed, err := url.Parse(proxyURL); err == nil {
 			proxy = parsed
 		}
+	}
+
+	// A nil *Store must become a nil interface, or every "f.proxies != nil" check passes.
+	var pool proxyPool
+	if proxies != nil {
+		pool = proxies
 	}
 
 	return &PageFetcher{
@@ -88,22 +103,28 @@ func NewPageFetcher(r *renderer.Renderer, cookiesFile, proxyURL string, proxies 
 		cfRelay:  NewCloudflareRelay(),
 		curlCFFI: NewCurlCFFI(),
 		firefox:  NewFirefox(),
-		proxies:  proxies,
+		proxies:  pool,
 		proxyURL: proxyURL,
 	}
 }
 
-// Fetch returns the page body plus which tier produced it (FetchMethodDirect/CFRelay/
-// Render) — see the constants' doc comment for why that's tracked separately from
-// extraction_method.
+// Fetch returns the page body plus which tier produced it (FetchMethodCurlCFFI/Direct/
+// CFRelay/Render/Firefox) — see the constants' doc comment for why that's tracked
+// separately from extraction_method.
+//
+// Tiers run cheapest-and-most-browserlike first: plain HTTP with Chrome impersonation
+// (fetchHTTP, itself escalating from the server's IP to a residential exit), the CF
+// relay, a Chromium render on the domain's residential exit, and finally Camoufox.
 func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 	if err := security.ValidateURL(url); err != nil {
 		return nil, "", fmt.Errorf("url validation failed: %w", err)
 	}
 	// Zara historically worked through a browser renderer but currently rejects the
 	// Chromium fingerprint. Try an isolated Firefox engine before the shared HTTP chain.
-	if body, ok := f.fetchZaraViaFirefox(url); ok {
-		return body, FetchMethodFirefox, nil
+	if isZaraURL(url) {
+		if body, err := f.fetchViaFirefox(url); err == nil {
+			return body, FetchMethodFirefox, nil
+		}
 	}
 
 	if f.renderer != nil && shouldRenderFirst(url) {
@@ -111,79 +132,174 @@ func (f *PageFetcher) Fetch(url string) ([]byte, string, error) {
 		if err == nil && !isBotChallenge([]byte(rendered)) {
 			return []byte(rendered), FetchMethodRender, nil
 		}
+		if err == nil {
+			f.rotateResidential(url)
+		}
 	}
 
+	body, method, err := f.fetchHTTP(url)
+	if err == nil {
+		return body, method, nil
+	}
+	if !errors.Is(err, errBotBlocked) && !shouldRenderFallback(err) {
+		return nil, "", err
+	}
+
+	if relayed, relayErr := f.fetchViaRelay(url); relayErr == nil && usableBody(url, relayed) {
+		return relayed, FetchMethodCFRelay, nil
+	}
+
+	if f.renderer != nil {
+		wait := 6 * time.Second
+		if errors.Is(err, errBotBlocked) {
+			wait = 3 * time.Second
+		}
+		rendered, renderErr := f.renderer.Render(nil, url, wait)
+		switch {
+		case renderErr != nil:
+			err = fmt.Errorf("http fetch failed: %w; renderer fallback failed: %w", err, renderErr)
+		case isBotChallenge([]byte(rendered)) || !usableBody(url, []byte(rendered)):
+			// The renderer relaunches the domain's browser on the new exit next time.
+			f.rotateResidential(url)
+			err = errBotBlocked
+		default:
+			return []byte(rendered), FetchMethodRender, nil
+		}
+	}
+
+	// Last resort for every site: Camoufox spoofs its fingerprint inside the engine rather
+	// than through CDP overrides, which is what gets it past Akamai where Chromium is
+	// refused. It's also the slowest tier — a fresh browser per page — so it only runs
+	// once everything cheaper has failed (for Zara this is the second try).
+	if body, ffErr := f.fetchViaFirefox(url); ffErr == nil {
+		return body, FetchMethodFirefox, nil
+	}
+	return nil, "", err
+}
+
+// fetchHTTP is the plain-HTTP part of the chain: curl-cffi's Chrome impersonation (real
+// h2, TLS and header order matching its UA, compression) stepping through exits from free
+// to paid — see httpExits. The in-process uTLS client only takes over when the curl-cffi
+// relay itself is unreachable: an HTTP/1.1-only "Chrome" is a bot signal of its own, and
+// it used to go out through the sticky residential exit and get that IP flagged right
+// before curl-cffi tried the very same one.
+func (f *PageFetcher) fetchHTTP(url string) ([]byte, string, error) {
+	if f.curlCFFI == nil {
+		return f.fetchUTLS(url)
+	}
+	var lastErr error
+	for i, exit := range f.httpExits(url) {
+		proxyURL, picked, ok := exit.pick()
+		if !ok {
+			continue
+		}
+		if i > 0 && lastErr != nil {
+			time.Sleep(time.Duration(300+rand.Intn(300)) * time.Millisecond)
+		}
+		body, err := f.fetchViaCurlCFFI(url, proxyURL, exit.timeout)
+		if err == nil {
+			if f.proxies != nil {
+				_ = f.proxies.SaveFingerprint(context.Background(), url, proxypool.FetchFingerprint{UserAgent: curlCFFIFingerprint, Proxy: picked})
+			}
+			return body, FetchMethodCurlCFFI, nil
+		}
+		if errors.Is(err, errRelayUnavailable) {
+			return f.fetchUTLS(url)
+		}
+		if exit.residential {
+			f.rotateResidential(url)
+		}
+		lastErr = err
+		if !errors.Is(err, errBotBlocked) && !shouldRenderFallback(err) {
+			// A 404 or an SSRF rejection: no other exit changes that.
+			return nil, "", err
+		}
+	}
+	return nil, "", lastErr
+}
+
+// curlCFFIFingerprint marks scrape_fingerprints rows written by the curl-cffi tier, whose
+// User-Agent is curl-cffi's own (matching its TLS), not one of ours. The uTLS fallback
+// replaying such a row finds no pooled profile by that name and picks a random one.
+const curlCFFIFingerprint = "curl_cffi"
+
+// httpExit is one network exit fetchHTTP can try. pick resolves it lazily, so the pool is
+// only queried (and a paid exit only counted as used) once the cheaper ones have failed.
+type httpExit struct {
+	residential bool
+	timeout     time.Duration
+	pick        func() (proxyURL string, picked proxypool.PickedProxy, ok bool)
+}
+
+// httpExits orders the exits for url: the proxy that last worked for this exact URL (if it
+// was one — skipping exits already known to fail saves requests that themselves raise a
+// bot score), then the server's own IP (or SCRAPER_PROXY_URL), a free public proxy, and
+// finally the paid residential exit pinned to the domain's sticky session.
+func (f *PageFetcher) httpExits(url string) []httpExit {
+	var exits []httpExit
+	if f.proxies != nil && !proxypool.RequiresRussianProxy(url) {
+		if saved, ok := f.proxies.GetFingerprint(context.Background(), url); ok && saved.Proxy.Address != "" {
+			exits = append(exits, httpExit{
+				residential: saved.Proxy.Username != "",
+				timeout:     curlCFFIExitTimeout,
+				pick: func() (string, proxypool.PickedProxy, bool) {
+					return saved.Proxy.ClientURL(), saved.Proxy, true
+				},
+			})
+		}
+	}
+	exits = append(exits, httpExit{
+		timeout: curlCFFIExitTimeout,
+		pick: func() (string, proxypool.PickedProxy, bool) {
+			return f.proxyURL, proxypool.PickedProxy{}, true
+		},
+	})
+	if f.proxies == nil {
+		return exits
+	}
+	return append(exits,
+		httpExit{
+			// Public proxies are mostly slow or dead; don't let one eat the whole budget.
+			timeout: publicProxyExitTimeout,
+			pick: func() (string, proxypool.PickedProxy, bool) {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				picked, ok := f.proxies.PickNonResidential(ctx)
+				return picked.ClientURL(), picked, ok
+			},
+		},
+		httpExit{
+			residential: true,
+			timeout:     curlCFFIExitTimeout,
+			pick: func() (string, proxypool.PickedProxy, bool) {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				picked, ok := f.proxies.PickResidentialForURL(ctx, url)
+				return picked.ClientURL(), picked, ok
+			},
+		},
+	)
+}
+
+const (
+	curlCFFIExitTimeout    = 25 * time.Second
+	publicProxyExitTimeout = 12 * time.Second
+)
+
+// fetchUTLS is the in-process fallback for when the curl-cffi relay is down: the saved
+// pairing, then the direct → public proxy → residential uTLS ladder.
+func (f *PageFetcher) fetchUTLS(url string) ([]byte, string, error) {
 	body, fp, err := f.fetchDirect(url)
 	if err != nil {
-		if !shouldRenderFallback(err) {
-			return nil, "", err
-		}
-		if impersonated, impersonateErr := f.fetchViaCurlCFFI(url); impersonateErr == nil && usableBody(url, impersonated) {
-			return impersonated, FetchMethodCurlCFFI, nil
-		}
-		if relayed, relayErr := f.fetchViaRelay(url); relayErr == nil && usableBody(url, relayed) {
-			return relayed, FetchMethodCFRelay, nil
-		}
-		if f.renderer == nil {
-			return nil, "", err
-		}
-		rendered, renderErr := f.renderer.Render(nil, url, 6*time.Second)
-		if renderErr != nil {
-			return nil, "", fmt.Errorf("http fetch failed: %w; renderer fallback failed: %w", err, renderErr)
-		}
-		if isBotChallenge([]byte(rendered)) || !usableBody(url, []byte(rendered)) {
-			if retried, ok := f.fetchZaraViaFirefox(url); ok {
-				return retried, FetchMethodFirefox, nil
-			}
-			return nil, "", errBotBlocked
-		}
-		return []byte(rendered), FetchMethodRender, nil
+		return nil, "", err
 	}
-
 	if isBotChallenge(body) || !usableBody(url, body) {
-		if impersonated, impersonateErr := f.fetchViaCurlCFFI(url); impersonateErr == nil && usableBody(url, impersonated) {
-			return impersonated, FetchMethodCurlCFFI, nil
-		}
-		if relayed, relayErr := f.fetchViaRelay(url); relayErr == nil && usableBody(url, relayed) {
-			return relayed, FetchMethodCFRelay, nil
-		}
-		if f.renderer == nil {
-			return nil, "", errBotBlocked
-		}
-		rendered, err := f.renderer.Render(nil, url, 3*time.Second)
-		if err != nil {
-			return nil, "", fmt.Errorf("renderer fallback failed: %w", err)
-		}
-		if isBotChallenge([]byte(rendered)) || !usableBody(url, []byte(rendered)) {
-			if retried, ok := f.fetchZaraViaFirefox(url); ok {
-				return retried, FetchMethodFirefox, nil
-			}
-			return nil, "", errBotBlocked
-		}
-		return []byte(rendered), FetchMethodRender, nil
+		return nil, "", errBotBlocked
 	}
-
 	if f.proxies != nil {
 		_ = f.proxies.SaveFingerprint(context.Background(), url, fp)
 	}
 	return body, FetchMethodDirect, nil
-}
-
-// fetchZaraViaFirefox returns a Zara page body only when the isolated Firefox engine
-// produced a real product page. Firefox is the only tier that currently gets through Zara's
-// Akamai edge, so it's tried first and — via usableBody's rejection of the other tiers'
-// output — retried once at the end rather than letting the chain settle for a body that
-// isn't the product. ok is false when Zara isn't the target, the engine isn't configured,
-// the fetch failed, or what came back isn't a PDP.
-func (f *PageFetcher) fetchZaraViaFirefox(url string) ([]byte, bool) {
-	if !isZaraURL(url) || f.firefox == nil {
-		return nil, false
-	}
-	body, err := f.fetchViaFirefox(url)
-	if err != nil || !usableBody(url, body) {
-		return nil, false
-	}
-	return body, true
 }
 
 // usableBody reports whether body is the page that was actually asked for. A fallback tier
@@ -214,39 +330,62 @@ func isZaraURL(rawURL string) bool {
 	return host == "zara.com" || strings.HasSuffix(host, ".zara.com")
 }
 
-func (f *PageFetcher) fetchViaFirefox(targetURL string) ([]byte, error) {
-	proxyURL := f.proxyURL
+// residentialProxyURL picks the residential exit for targetURL's host, or "" when the pool
+// isn't wired up or has no alive residential proxy.
+func (f *PageFetcher) residentialProxyURL(targetURL string) string {
+	if f.proxies == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	picked, ok := f.proxies.PickResidentialForURL(ctx, targetURL)
+	if !ok {
+		return ""
+	}
+	return picked.HTTPURL()
+}
+
+// rotateResidential moves targetURL's host off its current residential exit IP after an
+// attempt through it failed, so the next tier (and the next check) doesn't retry from an
+// address the site has just refused — see proxypool.Store.RotateResidentialSession.
+func (f *PageFetcher) rotateResidential(targetURL string) {
 	if f.proxies != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		picked, ok := f.proxies.PickResidentialForURL(ctx, targetURL)
-		cancel()
-		if ok {
-			proxyURL = picked.HTTPURL()
-		}
+		f.proxies.RotateResidentialSession(targetURL)
 	}
-	headers := map[string]string{
-		"Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
-		"Cache-Control":   "no-cache",
+}
+
+// fetchViaFirefox renders through the Camoufox relay (firefox-relay/) on the domain's
+// residential exit. Camoufox sets its own Accept-Language and timezone from its locale
+// and the exit IP, so only cookies are passed along.
+func (f *PageFetcher) fetchViaFirefox(targetURL string) ([]byte, error) {
+	if f.firefox == nil {
+		return nil, fmt.Errorf("firefox renderer not configured")
 	}
+	proxyURL := f.proxyURL
+	residential := f.residentialProxyURL(targetURL)
+	if residential != "" {
+		proxyURL = residential
+	}
+	headers := map[string]string{}
 	if cookieHeader := scraper.HeaderForURL(f.cookies, targetURL); cookieHeader != "" {
 		headers["Cookie"] = cookieHeader
 	}
-	return f.firefox.Fetch(targetURL, proxyURL, headers)
+	body, err := f.firefox.Fetch(targetURL, proxyURL, headers)
+	if err == nil && !usableBody(targetURL, body) {
+		err = errBotBlocked
+	}
+	if err != nil {
+		if residential != "" {
+			f.rotateResidential(targetURL)
+		}
+		return nil, err
+	}
+	return body, nil
 }
 
-func (f *PageFetcher) fetchViaCurlCFFI(targetURL string) ([]byte, error) {
-	if f.curlCFFI == nil {
-		return nil, fmt.Errorf("curl-cffi relay not configured")
-	}
-	proxyURL := ""
-	if f.proxies != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		picked, ok := f.proxies.PickResidentialForURL(ctx, targetURL)
-		cancel()
-		if ok {
-			proxyURL = picked.HTTPURL()
-		}
-	}
+// fetchViaCurlCFFI fetches through the curl-cffi relay from proxyURL ("" = the relay's
+// own IP). A challenge page or an unusable lookalike comes back as errBotBlocked.
+func (f *PageFetcher) fetchViaCurlCFFI(targetURL, proxyURL string, timeout time.Duration) ([]byte, error) {
 	headers := map[string]string{
 		"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
 		"Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -256,7 +395,14 @@ func (f *PageFetcher) fetchViaCurlCFFI(targetURL string) ([]byte, error) {
 	if cookieHeader := scraper.HeaderForURL(f.cookies, targetURL); cookieHeader != "" {
 		headers["Cookie"] = cookieHeader
 	}
-	return f.curlCFFI.Fetch(targetURL, proxyURL, headers)
+	body, err := f.curlCFFI.Fetch(targetURL, proxyURL, headers, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if !usableBody(targetURL, body) {
+		return nil, errBotBlocked
+	}
+	return body, nil
 }
 
 // fetchDirect tries the (User-Agent, proxy) pairing that last worked for this exact URL
@@ -312,6 +458,9 @@ func (f *PageFetcher) httpFetchWithRetry(url string) ([]byte, proxypool.FetchFin
 			tier = "residential"
 		}
 		body, fp, err := f.httpFetch(url, nil, tier)
+		if tier == "residential" && fp.Proxy.Address != "" && (err != nil || isBotChallenge(body) || !usableBody(url, body)) {
+			f.rotateResidential(url)
+		}
 		if err == nil {
 			return body, fp, nil
 		}
@@ -361,20 +510,25 @@ func (f *PageFetcher) pickForAttempt(targetURL, tier string, forced *proxypool.F
 // clientFor returns the http.Client to issue the request through: a fresh uTLS client
 // dialing via proxy's http:// CONNECT endpoint (see PickedProxy.HTTPURL's doc comment for
 // why http:// rather than socks5:// even though the pool stores them as SOCKS5), or the
-// statically-configured client from NewPageFetcher when no per-request proxy was picked.
+// statically-configured transport from NewPageFetcher when no per-request proxy was picked.
+//
+// Every call gets its own cookie jar. Anti-bot edges and geo/consent gates commonly answer
+// the first hit with a Set-Cookie plus a redirect and expect that cookie back on the next
+// hop; without a jar the redirect arrives cookie-less and gets blocked or loops until "too
+// many redirects". The jar is per fetch, never shared, so cookies can't leak between
+// targets, proxies, or users.
 func (f *PageFetcher) clientFor(proxy proxypool.PickedProxy) *http.Client {
+	client := *f.httpClient
+	client.Jar, _ = cookiejar.New(nil)
 	if proxy.Address == "" {
-		return f.httpClient
+		return &client
 	}
 	proxyURL, err := url.Parse(proxy.HTTPURL())
 	if err != nil {
-		return f.httpClient
+		return &client
 	}
-	return &http.Client{
-		Timeout:       requestTimeout,
-		Transport:     newUTLSRoundTripper(proxyURL),
-		CheckRedirect: f.httpClient.CheckRedirect,
-	}
+	client.Transport = newUTLSRoundTripper(proxyURL)
+	return &client
 }
 
 func (f *PageFetcher) httpFetch(url string, forced *proxypool.FetchFingerprint, tier string) ([]byte, proxypool.FetchFingerprint, error) {
@@ -384,6 +538,8 @@ func (f *PageFetcher) httpFetch(url string, forced *proxypool.FetchFingerprint, 
 	}
 
 	profile, proxy := f.pickForAttempt(url, tier, forced)
+	// Returned on failure too, so the caller can tell which exit the failed attempt used.
+	fp := proxypool.FetchFingerprint{UserAgent: profile.UserAgent, Proxy: proxy}
 	req.Header.Set("User-Agent", profile.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7")
@@ -403,21 +559,21 @@ func (f *PageFetcher) httpFetch(url string, forced *proxypool.FetchFingerprint, 
 
 	resp, err := f.clientFor(proxy).Do(req)
 	if err != nil {
-		return nil, proxypool.FetchFingerprint{}, fmt.Errorf("http request failed: %w", err)
+		return nil, fp, fmt.Errorf("http request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, proxypool.FetchFingerprint{}, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, fp, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	reader := io.LimitReader(resp.Body, maxBodySize)
 	body, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, proxypool.FetchFingerprint{}, fmt.Errorf("read body: %w", err)
+		return nil, fp, fmt.Errorf("read body: %w", err)
 	}
 
-	return body, proxypool.FetchFingerprint{UserAgent: profile.UserAgent, Proxy: proxy}, nil
+	return body, fp, nil
 }
 
 func isBotChallenge(body []byte) bool {
@@ -431,7 +587,14 @@ func isBotChallenge(body []byte) bool {
 		`checking your browser`,
 		`DDoS protection`,
 		`cf-browser-verification`,
-		`challenge-platform`,
+		// Cloudflare's interstitial challenge. Deliberately not the bare
+		// "challenge-platform": with Bot Fight Mode / JS detections enabled, Cloudflare
+		// injects /cdn-cgi/challenge-platform/scripts/jsd/main.js into ordinary pages too,
+		// so that substring flagged real product pages as blocked. Only the challenge
+		// page itself carries _cf_chl_opt and the /h/ orchestrate path; its visible
+		// wording is localized per Accept-Language, so those are the reliable markers.
+		`_cf_chl_opt`,
+		`/cdn-cgi/challenge-platform/h/`,
 		`Just a moment...`,
 		// Akamai edge deny — confirmed against www2.hm.com (blocks at the network/IP
 		// reputation layer, before any JS challenge; the page itself is tiny).
@@ -506,6 +669,17 @@ func shouldRenderFallback(err error) bool {
 		// falling through to the cf_relay/render tiers.
 		"utls dial:",
 		"utls handshake:",
+		// The connection was established but the edge dropped it instead of answering —
+		// how some Akamai/Cloudflare configs treat an HTTP/1.1-only "Chrome" (our uTLS
+		// tier can't speak h2). curl-cffi impersonates h2 properly, so these must fall
+		// through to it rather than fail the whole fetch on the first tier.
+		"read response:",
+		"write request:",
+		"connection reset by peer",
+		"EOF",
+		// curl-cffi couldn't complete the request through the chosen exit (dead or slow
+		// proxy, refused connection) — another exit or tier may well succeed.
+		"curl-cffi upstream fetch failed",
 	}
 	for _, indicator := range indicators {
 		if strings.Contains(msg, indicator) {

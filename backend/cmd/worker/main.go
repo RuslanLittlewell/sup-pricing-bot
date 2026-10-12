@@ -62,6 +62,8 @@ func main() {
 	defer trackerTicker.Stop()
 	defer notifTicker.Stop()
 
+	// Renders go out through each domain's residential exit, like the HTTP tiers.
+	rend.UseProxyPool(proxypool.NewStore(pool))
 	fetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy, proxypool.NewStore(pool))
 	attributeExtractor := extractor.NewAttribute()
 	genericExtractor := extractor.NewGeneric()

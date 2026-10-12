@@ -20,7 +20,7 @@ func TestCurlCFFIFetcher(t *testing.T) {
 	})}
 
 	fetcher := &CurlCFFIFetcher{baseURL: "http://curl-cffi:8080", client: client}
-	body, err := fetcher.Fetch("https://example.com/item", "", map[string]string{"Accept-Language": "pl-PL"})
+	body, err := fetcher.Fetch("https://example.com/item", "", map[string]string{"Accept-Language": "pl-PL"}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,8 +35,8 @@ func TestCurlCFFIFetcherRejectsUpstreamBlock(t *testing.T) {
 	})}
 
 	fetcher := &CurlCFFIFetcher{baseURL: "http://curl-cffi:8080", client: client}
-	if _, err := fetcher.Fetch("https://example.com/item", "", nil); err == nil {
-		t.Fatal("expected upstream 403 to be rejected")
+	if _, err := fetcher.Fetch("https://example.com/item", "", nil, 0); err == nil || !shouldRenderFallback(err) {
+		t.Fatalf("expected upstream 403 to be rejected as retryable, got %v", err)
 	}
 }
 
@@ -47,7 +47,7 @@ func TestCurlCFFIFetcherRejectsAkamaiSoftBlock(t *testing.T) {
 	})}
 
 	fetcher := &CurlCFFIFetcher{baseURL: "http://curl-cffi:8080", client: client}
-	if _, err := fetcher.Fetch("https://example.com/item", "", nil); err == nil {
+	if _, err := fetcher.Fetch("https://example.com/item", "", nil, 0); err == nil {
 		t.Fatal("expected HTTP 200 Akamai deny page to be rejected")
 	}
 }

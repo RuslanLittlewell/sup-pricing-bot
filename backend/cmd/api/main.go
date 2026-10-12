@@ -99,6 +99,8 @@ func main() {
 	if err := db.RunMigrations(ctx, pool, log); err != nil {
 		log.Fatal().Err(err).Msg("failed to run migrations")
 	}
+	// Renders go out through each domain's residential exit, like the HTTP tiers.
+	rend.UseProxyPool(proxypool.NewStore(pool))
 	pageFetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy, proxypool.NewStore(pool))
 
 	r := chi.NewRouter()

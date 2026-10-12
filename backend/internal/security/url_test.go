@@ -9,6 +9,9 @@ func TestSafeDialControlBlocksPrivate(t *testing.T) {
 		"192.168.0.5:8080",
 		"169.254.169.254:80", // cloud metadata endpoint
 		"[::1]:443",
+		"0.0.0.0:8080", // reaches local listeners on Linux
+		"[::]:8080",
+		"100.64.1.2:80", // CGNAT / overlay network
 	}
 	for _, addr := range blocked {
 		if err := SafeDialControl("tcp", addr, nil); err == nil {

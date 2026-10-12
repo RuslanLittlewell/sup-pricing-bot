@@ -66,6 +66,9 @@ services:
       start_period: 10s
 
   firefox-renderer:
+    # Camoufox (see firefox-relay/Dockerfile): every site's last-resort tier, and Zara's
+    # first. Renders through the domain's residential exit, one at a time by default
+    # (MAX_CONCURRENT_RENDERS) — each is a full browser, and the VPS has 2 GB.
     build:
       context: ../firefox-relay
       dockerfile: Dockerfile
@@ -100,9 +103,15 @@ services:
       SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
       SCRAPER_PROFILE_DIR: /var/lib/pricebot/browser-profiles
       RENDERER_PROFILE_NAMESPACE: backend
-      SCRAPER_EXTENSION_DIR: ${SCRAPER_EXTENSION_DIR:-/opt/extensions/antibot-detector}
-      SCRAPER_PERSISTENT_BROWSER: ${SCRAPER_PERSISTENT_BROWSER:-true}
-      SCRAPER_MAX_BROWSER_SESSIONS: ${SCRAPER_MAX_BROWSER_SESSIONS:-4}
+      # The antibot-detector extension is a diagnostic tool, not part of scraping: set
+      # SCRAPER_EXTENSION_DIR=/opt/extensions/antibot-detector to load it while
+      # investigating a site. Headful mode no longer depends on it.
+      SCRAPER_EXTENSION_DIR: ${SCRAPER_EXTENSION_DIR:-}
+      SCRAPER_HEADFUL: ${SCRAPER_HEADFUL:-true}
+      # The API only renders on demand (playground, adding a tracker), so it starts a
+      # browser per call instead of keeping one resident on the 2 GB VPS.
+      SCRAPER_PERSISTENT_BROWSER: ${SCRAPER_PERSISTENT_BROWSER_API:-false}
+      SCRAPER_MAX_BROWSER_SESSIONS: ${SCRAPER_MAX_BROWSER_SESSIONS:-1}
       SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
       CF_RELAY_URL: ${CF_RELAY_URL:-}
       CF_RELAY_TOKEN: ${CF_RELAY_TOKEN:-}
@@ -160,9 +169,12 @@ services:
       SCRAPER_COOKIES_FILE: /run/secrets/scraper-cookies.json
       SCRAPER_PROFILE_DIR: /var/lib/pricebot/browser-profiles
       RENDERER_PROFILE_NAMESPACE: worker
-      SCRAPER_EXTENSION_DIR: ${SCRAPER_EXTENSION_DIR:-/opt/extensions/antibot-detector}
+      SCRAPER_EXTENSION_DIR: ${SCRAPER_EXTENSION_DIR:-}
+      SCRAPER_HEADFUL: ${SCRAPER_HEADFUL:-true}
       SCRAPER_PERSISTENT_BROWSER: ${SCRAPER_PERSISTENT_BROWSER:-true}
-      SCRAPER_MAX_BROWSER_SESSIONS: ${SCRAPER_MAX_BROWSER_SESSIONS:-4}
+      # Persistent browsers now really stay up — one warm Chromium (the domain the worker
+      # is on) fits the 2 GB VPS; it closes after 10 idle minutes.
+      SCRAPER_MAX_BROWSER_SESSIONS: ${SCRAPER_MAX_BROWSER_SESSIONS:-1}
       SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
       CF_RELAY_URL: ${CF_RELAY_URL:-}
       CF_RELAY_TOKEN: ${CF_RELAY_TOKEN:-}

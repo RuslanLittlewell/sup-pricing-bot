@@ -7,26 +7,39 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
+	"github.com/littlewell/price-tracker/internal/proxypool"
 	"github.com/littlewell/price-tracker/internal/scraper"
 	"github.com/littlewell/price-tracker/internal/useragent"
 )
 
-const acceptLanguage = "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"
+// acceptLanguages is the plain language list for Emulation.setUserAgentOverride, which
+// adds the q-weights itself (producing "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"). Passing an
+// already-weighted header value yields "pl;q=0.9;q=0.9" and navigator.languages entries
+// like "pl;q=0.9".
+const acceptLanguages = "pl-PL,pl,en-US,en"
+
+// ProxySource hands out a domain's residential exit (proxypool.Store). Every persistent
+// browser is a single domain's own Chromium process, so it can carry that domain's sticky
+// exit in --proxy-server.
+type ProxySource interface {
+	PickResidentialForURL(ctx context.Context, rawURL string) (proxypool.PickedProxy, bool)
+}
 
 type Renderer struct {
 	rootCtx       context.Context
@@ -35,19 +48,41 @@ type Renderer struct {
 	proxyServer   string
 	proxyUser     string
 	proxyPassword string
-	profileRoot   string
-	profileMu     sync.Mutex
-	profileLocks  map[string]*sync.Mutex
-	extensionDir  string
-	persistent    bool
-	maxSessions   int
-	sessions      map[string]*browserSession
+	proxies       ProxySource
+	execPath      string
+	// identity is the browser this renderer really is (see detectIdentity), presented by
+	// every session.
+	identity     useragent.Profile
+	headful      bool
+	profileRoot  string
+	profileMu    sync.Mutex
+	profileLocks map[string]*sync.Mutex
+	extensionDir string
+	persistent   bool
+	maxSessions  int
+	sessions     map[string]*browserSession
+	// extraFlags is a test hook, e.g. to route loopback through a test proxy.
+	extraFlags []chromedp.ExecAllocatorOption
 }
 
 type browserSession struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	lastUsed time.Time
+	timezone string
+	// The exit this Chromium was launched through. --proxy-server is fixed for the
+	// process's lifetime, so proxyGen — the host's residential generation at launch — is
+	// how a later render notices the host has been rotated off this IP and relaunches.
+	proxyUser     string
+	proxyPassword string
+	residential   bool
+	proxyGen      uint32
+	// skipMedia is set by Render while it holds the host lock and read by the request
+	// interceptor on CDP's event goroutine.
+	skipMedia atomic.Bool
+	// prepared records that identity and proxy auth have been applied to the tab; only
+	// read/written under the host's profile lock.
+	prepared bool
 }
 
 type PriceBlockCandidate struct {
@@ -92,10 +127,18 @@ func New(cookiesFile, proxyURL string) (*Renderer, error) {
 			maxSessions = parsed
 		}
 	}
+	execPath := os.Getenv("CHROME_PATH") // set by the Dockerfile; lets a local run use its own Chrome
+	if execPath == "" {
+		execPath = "/usr/bin/chromium"
+	}
 	rootCtx, cancel := context.WithCancel(context.Background())
 	return &Renderer{
 		rootCtx: rootCtx, cancel: cancel, cookies: cookies,
 		proxyServer: proxyServer, proxyUser: proxyUser, proxyPassword: proxyPassword,
+		execPath: execPath, identity: detectIdentity(execPath),
+		// Headful (under the entrypoint's Xvfb) is what a real visitor runs; the extension
+		// used to be the only way to get it, which tied a diagnostic tool to production.
+		headful:     strings.EqualFold(os.Getenv("SCRAPER_HEADFUL"), "true"),
 		profileRoot: profileRoot, profileLocks: map[string]*sync.Mutex{},
 		extensionDir: os.Getenv("SCRAPER_EXTENSION_DIR"),
 		persistent:   strings.EqualFold(os.Getenv("SCRAPER_PERSISTENT_BROWSER"), "true"),
@@ -104,10 +147,47 @@ func New(cookiesFile, proxyURL string) (*Renderer, error) {
 	}, nil
 }
 
-func (r *Renderer) allocatorOptions(profileDir string, loadExtension bool) []chromedp.ExecAllocatorOption {
-	headless := !loadExtension
+// UseProxyPool routes each domain's browser through that domain's residential exit,
+// falling back to SCRAPER_PROXY_URL — or the server's own IP — while the pool has none.
+// Without it every render left from the server's datacenter IP, which Akamai and DataDome
+// reject on reputation alone, whatever the browser fingerprint. Call before first use.
+func (r *Renderer) UseProxyPool(source ProxySource) {
+	r.proxies = source
+}
+
+// detectIdentity describes the browser binary itself, so the UA and client hints name the
+// version the page's JS engine actually is: a pooled "Chrome/146" UA on top of some other
+// engine version is detectable through feature support alone.
+func detectIdentity(execPath string) useragent.Profile {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, execPath, "--version").Output(); err == nil {
+		if version, product, ok := parseBrowserVersion(string(out)); ok {
+			return useragent.Native(version, product)
+		}
+	}
+	return useragent.Native(useragent.Latest(), "")
+}
+
+var browserVersionPattern = regexp.MustCompile(`\b\d+\.\d+\.\d+\.\d+\b`)
+
+// parseBrowserVersion reads `<binary> --version`, e.g. "Chromium 148.0.7778.96 Alpine
+// Linux" or "Google Chrome 148.0.7778.97". Only Google's build carries the "Google Chrome"
+// brand; a Chromium build's client hints list just Chromium and the GREASE entry.
+func parseBrowserVersion(out string) (version, product string, ok bool) {
+	version = browserVersionPattern.FindString(out)
+	if version == "" {
+		return "", "", false
+	}
+	if strings.Contains(out, "Google Chrome") {
+		product = "Google Chrome"
+	}
+	return version, product, true
+}
+
+func (r *Renderer) allocatorOptions(profileDir string, headless, loadExtension bool, proxyServer string) []chromedp.ExecAllocatorOption {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath("/usr/bin/chromium"),
+		chromedp.ExecPath(r.execPath),
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("headless", headless),
 		chromedp.Flag("disable-gpu", true),
@@ -119,7 +199,9 @@ func (r *Renderer) allocatorOptions(profileDir string, loadExtension bool) []chr
 		chromedp.Flag("disable-features", "VizDisplayCompositor,IsolateOrigins,site-per-process"),
 		chromedp.Flag("window-size", "1920,1080"),
 		chromedp.Flag("lang", "pl-PL"),
-		chromedp.UserAgent(useragent.Random().UserAgent),
+		// The CDP override in setupRealBrowser only covers the page target; this covers
+		// workers. Same identity in both.
+		chromedp.UserAgent(r.identity.UserAgent),
 	)
 	if loadExtension {
 		opts = append(opts,
@@ -130,11 +212,50 @@ func (r *Renderer) allocatorOptions(profileDir string, loadExtension bool) []chr
 			chromedp.Flag("load-extension", r.extensionDir),
 		)
 	}
-	if r.proxyServer != "" {
-		opts = append(opts, chromedp.ProxyServer(r.proxyServer))
+	if proxyServer != "" {
+		opts = append(opts,
+			chromedp.ProxyServer(proxyServer),
+			// WebRTC's UDP doesn't go through --proxy-server, so a page could otherwise
+			// learn the server's real IP from a STUN request and compare it with the exit
+			// IP its requests arrive from.
+			chromedp.Flag("force-webrtc-ip-handling-policy", "disable_non_proxied_udp"),
+		)
 	}
+	return append(opts, r.extraFlags...)
+}
 
-	return opts
+// exitFor picks the proxy a new browser for rawURL is launched through.
+func (r *Renderer) exitFor(rawURL string) (server, user, password string, residential bool) {
+	if r.proxies != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if picked, ok := r.proxies.PickResidentialForURL(ctx, rawURL); ok {
+			// http:// CONNECT even for entries stored as socks5: Chromium can't answer a
+			// SOCKS5 auth challenge (see proxypool.PickedProxy.HTTPURL).
+			return "http://" + picked.Address, picked.Username, picked.Password, true
+		}
+	}
+	return r.proxyServer, r.proxyUser, r.proxyPassword, false
+}
+
+// rotatedSince reports whether rawURL's host has been moved onto a new residential exit
+// since session's browser was launched — see proxypool.Store.RotateResidentialSession.
+func (r *Renderer) rotatedSince(session *browserSession, rawURL string) bool {
+	return r.proxies != nil && proxypool.ResidentialGeneration(rawURL) != session.proxyGen
+}
+
+// timezoneFor matches the browser clock to the country its exit is pinned to (see
+// proxypool's DataImpulse country targeting): a pl-PL browser on UTC — a server's zone — or
+// on Warsaw time behind a Moscow IP is a cheap inconsistency to check.
+func timezoneFor(host string) string {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	switch {
+	case strings.HasSuffix(host, ".ru"):
+		return "Europe/Moscow"
+	case strings.HasSuffix(host, ".by"):
+		return "Europe/Minsk"
+	}
+	return "Europe/Warsaw"
 }
 
 func (r *Renderer) Close() {
@@ -151,7 +272,11 @@ func (r *Renderer) Close() {
 
 var unsafeProfileChar = regexp.MustCompile(`[^a-zA-Z0-9.-]+`)
 
-func (r *Renderer) newProfileContext(rawURL string) (context.Context, context.CancelFunc, error) {
+// acquire returns the browser session for rawURL's host, launching one if needed, plus
+// the release func that must be called when done. The host's lock is held until release,
+// so a session is only ever driven by one caller at a time. Callers run r.prepare(session)
+// before navigating.
+func (r *Renderer) acquire(rawURL string) (*browserSession, func(), error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Hostname() == "" {
 		return nil, nil, fmt.Errorf("invalid profile URL")
@@ -185,23 +310,42 @@ func (r *Renderer) newProfileContext(rawURL string) (context.Context, context.Ca
 	}
 	if persistent {
 		r.profileMu.Lock()
+		r.closeIdleSessionsLocked(key)
 		if session := r.sessions[key]; session != nil {
-			if session.ctx.Err() == nil {
+			if session.ctx.Err() == nil && !r.rotatedSince(session, rawURL) {
 				session.lastUsed = time.Now()
 				r.profileMu.Unlock()
-				return session.ctx, lock.Unlock, nil
+				return session, lock.Unlock, nil
 			}
-			// Chromium may exit independently (crash, process kill, failed startup). Its
-			// context remains in the session map unless we explicitly evict it, causing
-			// every later render for this domain to fail immediately with context canceled.
+			// Either Chromium exited on its own (crash, process kill, failed startup) —
+			// left in the map, its dead context would fail every later render for this
+			// domain — or the domain was rotated onto a new exit since it was launched.
 			session.cancel()
 			delete(r.sessions, key)
 		}
 		r.profileMu.Unlock()
 	}
 
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(r.rootCtx, r.allocatorOptions(profileDir, r.extensionDir != "" && !legacy)...)
+	gen := proxypool.ResidentialGeneration(rawURL)
+	server, user, password, residential := r.exitFor(rawURL)
+	headless := legacy || !(r.headful || r.extensionDir != "")
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(r.rootCtx, r.allocatorOptions(profileDir, headless, r.extensionDir != "" && !legacy, server)...)
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	// Start Chromium here, on the long-lived context. chromedp ties the browser process to
+	// whatever context the *first* Run gets, and callers run with a per-render timeout —
+	// so the "persistent" browser used to be killed as soon as its first render returned,
+	// and every check cold-started a new one.
+	if err := chromedp.Run(browserCtx); err != nil {
+		cancelBrowser()
+		cancelAlloc()
+		lock.Unlock()
+		return nil, nil, fmt.Errorf("start browser: %w", err)
+	}
+	session := &browserSession{ctx: browserCtx, cancel: func() {
+		cancelBrowser()
+		cancelAlloc()
+	}, lastUsed: time.Now(), timezone: timezoneFor(parsed.Hostname()),
+		proxyUser: user, proxyPassword: password, residential: residential, proxyGen: gen}
 	if persistent {
 		r.profileMu.Lock()
 		if len(r.sessions) >= r.maxSessions {
@@ -217,14 +361,11 @@ func (r *Renderer) newProfileContext(rawURL string) (context.Context, context.Ca
 				delete(r.sessions, oldestKey)
 			}
 		}
-		r.sessions[key] = &browserSession{ctx: browserCtx, cancel: func() {
-			cancelBrowser()
-			cancelAlloc()
-		}, lastUsed: time.Now()}
+		r.sessions[key] = session
 		r.profileMu.Unlock()
-		return browserCtx, lock.Unlock, nil
+		return session, lock.Unlock, nil
 	}
-	cancel := func() {
+	release := func() {
 		closeCtx, closeCancel := context.WithTimeout(browserCtx, 3*time.Second)
 		_ = chromedp.Cancel(closeCtx)
 		closeCancel()
@@ -232,7 +373,45 @@ func (r *Renderer) newProfileContext(rawURL string) (context.Context, context.Ca
 		cancelAlloc()
 		lock.Unlock()
 	}
-	return browserCtx, cancel, nil
+	return session, release, nil
+}
+
+// sessionIdleTimeout closes persistent browsers nobody has rendered with for a while. Each
+// one is a full Chromium process, and only bursts of checks against the same domain gain
+// anything from keeping it warm; the profile directory keeps the cookies either way.
+const sessionIdleTimeout = 10 * time.Minute
+
+// closeIdleSessionsLocked must be called with profileMu held. keep is the host about to be
+// used, which must not be closed out from under the caller. Renders finish well within the
+// timeout, so a session idle that long isn't mid-render.
+func (r *Renderer) closeIdleSessionsLocked(keep string) {
+	for key, session := range r.sessions {
+		if key != keep && time.Since(session.lastUsed) > sessionIdleTimeout {
+			session.cancel()
+			delete(r.sessions, key)
+		}
+	}
+}
+
+// prepare applies the identity and proxy auth to session's tab, once per Chromium. A
+// persistent tab outlives every render, and redoing this per render used to stack another
+// auth listener and another init script each time and re-randomize the identity mid-session
+// — a new UA/platform on every check, presented alongside anti-bot cookies (Akamai _abck,
+// DataDome) that were issued to the previous one.
+func (r *Renderer) prepare(session *browserSession) chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		if session.prepared {
+			return nil
+		}
+		if err := r.setupProxyAuth(session).Do(ctx); err != nil {
+			return err
+		}
+		if err := setupRealBrowser(r.identity, session.timezone).Do(ctx); err != nil {
+			return err
+		}
+		session.prepared = true
+		return nil
+	})
 }
 
 func usesLegacyRenderer(hostname string) bool {
@@ -241,19 +420,26 @@ func usesLegacyRenderer(hostname string) bool {
 }
 
 func (r *Renderer) Render(ctx context.Context, url string, waitTime time.Duration) (string, error) {
-	browserCtx, release, err := r.newProfileContext(url)
+	session, release, err := r.acquire(url)
 	if err != nil {
 		return "", err
 	}
 	defer release()
 
-	ctx, cancel := context.WithTimeout(browserCtx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(session.ctx, 30*time.Second)
 	defer cancel()
+
+	// Images and video are most of a product page's bytes and none of its price, and on a
+	// residential exit every byte is billed. Render only: FindPriceBlock's screenshot is
+	// shown to the user and has to look like the page.
+	if session.residential {
+		session.skipMedia.Store(true)
+		defer session.skipMedia.Store(false)
+	}
 
 	var html string
 	tasks := []chromedp.Action{
-		r.setupProxyAuth(),
-		setupRealBrowser(),
+		r.prepare(session),
 		r.setCookiesForURL(url),
 		chromedp.Navigate(url),
 		chromedp.WaitReady("body", chromedp.ByQuery),
@@ -266,8 +452,8 @@ func (r *Renderer) Render(ctx context.Context, url string, waitTime time.Duratio
 	if err := chromedp.Run(ctx, tasks...); err != nil {
 		// A canceled parent means the persistent browser itself is gone. Do not cache
 		// the poisoned session: the next tracker run must start a fresh Chromium.
-		if errors.Is(browserCtx.Err(), context.Canceled) {
-			r.evictSession(url, browserCtx)
+		if errors.Is(session.ctx.Err(), context.Canceled) {
+			r.evictSession(url, session.ctx)
 		}
 		return "", err
 	}
@@ -294,13 +480,13 @@ func (r *Renderer) evictSession(rawURL string, expected context.Context) {
 // best-effort: a challenge page can time out while still leaving useful targets and
 // cookies behind for troubleshooting.
 func (r *Renderer) Diagnostics(rawURL string) (*BrowserDiagnostics, error) {
-	ctx, release, err := r.newProfileContext(rawURL)
+	session, release, err := r.acquire(rawURL)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(session.ctx, 5*time.Second)
 	defer cancel()
 	out := &BrowserDiagnostics{
 		PersistentBrowser: r.persistent,
@@ -360,13 +546,13 @@ func extensionStarted(profileDir, extensionDir string) bool {
 }
 
 func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index int) (*PriceBlockCandidate, []byte, error) {
-	ctx, cancel, err := r.newProfileContext(url)
+	session, release, err := r.acquire(url)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer cancel()
+	defer release()
 
-	ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
+	ctx, cancel := context.WithTimeout(session.ctx, 45*time.Second)
 	defer cancel()
 
 	var candidate PriceBlockCandidate
@@ -703,8 +889,7 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
 })()`, string(priceJSON), index)
 
 	if err := chromedp.Run(ctx,
-		r.setupProxyAuth(),
-		setupRealBrowser(),
+		r.prepare(session),
 		r.setCookiesForURL(url),
 		chromedp.Navigate(url),
 		chromedp.WaitReady("body", chromedp.ByQuery),
@@ -739,13 +924,13 @@ func (r *Renderer) FindPriceBlock(ctx context.Context, url, price string, index 
 }
 
 func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (string, error) {
-	ctx, cancel, err := r.newProfileContext(url)
+	session, release, err := r.acquire(url)
 	if err != nil {
 		return "", err
 	}
-	defer cancel()
+	defer release()
 
-	ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
+	ctx, cancel := context.WithTimeout(session.ctx, 45*time.Second)
 	defer cancel()
 
 	selectorJSON, _ := json.Marshal(selector)
@@ -788,8 +973,7 @@ func (r *Renderer) TextBySelector(ctx context.Context, url, selector string) (st
 
 	var text string
 	if err := chromedp.Run(ctx,
-		r.setupProxyAuth(),
-		setupRealBrowser(),
+		r.prepare(session),
 		r.setCookiesForURL(url),
 		chromedp.Navigate(url),
 		chromedp.WaitReady("body", chromedp.ByQuery),
@@ -831,79 +1015,94 @@ func normalizeProxyURL(raw string) (server, username, password string) {
 	return parsed.String(), username, password
 }
 
-func (r *Renderer) setupProxyAuth() chromedp.Action {
+// setupProxyAuth answers the proxy's auth challenge with the credentials of the exit
+// session was launched through, for the session's whole lifetime (not the calling
+// render's timeout context — a listener tied to that would be dropped after the first
+// render, while Fetch stays enabled on the persistent tab).
+//
+// Fetch.enable without patterns pauses *every* request until someone continues it, not
+// just the ones that hit an auth challenge, so the listener has to release paused
+// requests too; handling only EventAuthRequired left each page load hanging until the
+// render timed out whenever SCRAPER_PROXY_URL carried credentials. Since every request
+// passes through here anyway, it's also where Render's media skipping happens.
+func (r *Renderer) setupProxyAuth(session *browserSession) chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
-		if r.proxyUser == "" {
+		if session.proxyUser == "" {
 			return nil
 		}
 
-		chromedp.ListenTarget(ctx, func(ev interface{}) {
-			authEvent, ok := ev.(*fetch.EventAuthRequired)
-			if !ok {
-				return
+		browserCtx := session.ctx
+		chromedp.ListenTarget(browserCtx, func(ev interface{}) {
+			switch ev := ev.(type) {
+			case *fetch.EventRequestPaused:
+				go func() {
+					if session.skipMedia.Load() && (ev.ResourceType == network.ResourceTypeImage || ev.ResourceType == network.ResourceTypeMedia) {
+						_ = chromedp.Run(browserCtx, fetch.FailRequest(ev.RequestID, network.ErrorReasonBlockedByClient))
+						return
+					}
+					_ = chromedp.Run(browserCtx, fetch.ContinueRequest(ev.RequestID))
+				}()
+			case *fetch.EventAuthRequired:
+				go func() {
+					_ = chromedp.Run(browserCtx, fetch.ContinueWithAuth(ev.RequestID, &fetch.AuthChallengeResponse{
+						Response: fetch.AuthChallengeResponseResponseProvideCredentials,
+						Username: session.proxyUser,
+						Password: session.proxyPassword,
+					}))
+				}()
 			}
-			go func() {
-				_ = fetch.ContinueWithAuth(authEvent.RequestID, &fetch.AuthChallengeResponse{
-					Response: fetch.AuthChallengeResponseResponseProvideCredentials,
-					Username: r.proxyUser,
-					Password: r.proxyPassword,
-				}).Do(ctx)
-			}()
 		})
 
 		return fetch.Enable().WithHandleAuthRequests(true).Do(ctx)
 	})
 }
 
-// setupRealBrowser picks a random browser fingerprint profile and applies it
-// consistently across every layer the page can inspect: the Sec-CH-UA* headers, the CDP
-// User-Agent/platform override, and the navigator.platform JS property. A fresh profile
-// is picked on every call (i.e. every Render/FindPriceBlock/TextBySelector invocation),
-// so successive checks of the same page don't repeat one fixed fingerprint.
-func setupRealBrowser() chromedp.Action {
-	profile := useragent.Random()
-
-	headers := network.Headers{
-		"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-		"Accept-Language":           acceptLanguage,
-		"Cache-Control":             "no-cache",
-		"Pragma":                    "no-cache",
-		"Sec-CH-UA":                 profile.SecCHUA,
-		"Sec-CH-UA-Mobile":          "?0",
-		"Sec-CH-UA-Platform":        profile.SecCHUAPlatform,
-		"Sec-Fetch-Dest":            "document",
-		"Sec-Fetch-Mode":            "navigate",
-		"Sec-Fetch-Site":            "none",
-		"Sec-Fetch-User":            "?1",
-		"Upgrade-Insecure-Requests": "1",
+// setupRealBrowser applies the browser identity consistently across every layer the page
+// can inspect, leaving Chromium itself to generate the request headers. In headful mode
+// this restates what Chromium would report anyway; in headless mode it hides the
+// "HeadlessChrome" UA and brand.
+//
+// The User-Agent Client Hints go in as UA metadata rather than hand-set Sec-CH-UA*
+// headers: overriding the UA without metadata makes Chromium report empty
+// navigator.userAgentData brands while our headers claimed "Google Chrome", and extra
+// HTTP headers apply to every subresource — which is why the document-only headers that
+// used to be set here (Accept: text/html, Sec-Fetch-Mode: navigate, Upgrade-Insecure-
+// Requests, ...) went out on images, scripts and XHRs too, and Cache-Control/Pragma
+// turned cross-origin API calls into CORS preflights. The platform override is the
+// navigator.platform value ("Win32"), not the client-hint name ("Windows").
+//
+// No init script either: --disable-blink-features=AutomationControlled already makes
+// navigator.webdriver false like a real Chrome (forcing it to undefined was itself a tell),
+// a fake [1..5] plugins array is a well-known stealth-plugin signature, and accept-language
+// plus the platform override cover navigator.languages and navigator.platform natively.
+func setupRealBrowser(profile useragent.Profile, timezone string) chromedp.Action {
+	brands := make([]*emulation.UserAgentBrandVersion, 0, len(profile.Brands))
+	fullVersions := make([]*emulation.UserAgentBrandVersion, 0, len(profile.Brands))
+	for _, b := range profile.Brands {
+		brands = append(brands, &emulation.UserAgentBrandVersion{Brand: b.Name, Version: b.Version})
+		full := b.Version + ".0.0.0"
+		if strings.HasPrefix(profile.FullVersion, b.Version+".") {
+			full = profile.FullVersion
+		}
+		fullVersions = append(fullVersions, &emulation.UserAgentBrandVersion{Brand: b.Name, Version: full})
 	}
 
 	return chromedp.Tasks{
 		network.Enable(),
-		network.SetExtraHTTPHeaders(headers),
 		emulation.SetUserAgentOverride(profile.UserAgent).
-			WithAcceptLanguage(acceptLanguage).
-			WithPlatform(profile.CDPPlatform),
+			WithAcceptLanguage(acceptLanguages).
+			WithPlatform(profile.NavigatorPlatform).
+			WithUserAgentMetadata(&emulation.UserAgentMetadata{
+				Brands:          brands,
+				FullVersionList: fullVersions,
+				Platform:        profile.CDPPlatform,
+				PlatformVersion: profile.CHPlatformVersion,
+				Architecture:    profile.Architecture,
+				Bitness:         "64",
+				FormFactors:     []string{"Desktop"},
+			}),
 		emulation.SetLocaleOverride().WithLocale("pl-PL"),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			script := fmt.Sprintf(`
-Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-Object.defineProperty(navigator, "languages", { get: () => ["pl-PL", "pl", "en-US", "en"] });
-Object.defineProperty(navigator, "platform", { get: () => %q });
-Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
-window.chrome = window.chrome || { runtime: {} };
-const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
-if (originalQuery) {
-  window.navigator.permissions.query = (parameters) => (
-    parameters && parameters.name === "notifications"
-      ? Promise.resolve({ state: Notification.permission })
-      : originalQuery(parameters)
-  );
-}
-`, profile.NavigatorPlatform)
-			_, err := page.AddScriptToEvaluateOnNewDocument(script).Do(ctx)
-			return err
-		}),
+		emulation.SetTimezoneOverride(timezone),
 	}
 }
 
