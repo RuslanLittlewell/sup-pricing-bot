@@ -86,3 +86,41 @@ func TestIsBotChallengeDetectsQrator(t *testing.T) {
 		t.Fatal("a plain mention of Qrator is not a challenge")
 	}
 }
+
+func TestIsBotChallengeIgnoresCloudflareJSDetectionsOnRealPage(t *testing.T) {
+	// Bot Fight Mode / JS detections inject this loader into ordinary pages; the product
+	// page itself is fine and must reach the parsers.
+	body := []byte(`<html><head><title>Krem do twarzy 50 ml</title></head><body>
+<span class="price">49,99 zł</span>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'8f1a2b3c4d5e6f70',t:'MTcyOTAwMDAwMC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}})();</script>
+</body></html>`)
+	if isBotChallenge(body) {
+		t.Fatal("a real page carrying Cloudflare's JS-detections loader is not a challenge")
+	}
+}
+
+func TestIsBotChallengeDetectsLocalizedCloudflareChallenge(t *testing.T) {
+	// The interstitial's visible text follows Accept-Language (we send pl-PL), so detection
+	// must not depend on the English "Just a moment...".
+	body := []byte(`<!DOCTYPE html><html lang="pl-PL"><head><title>Chwileczkę…</title></head><body>
+<script>(function(){window._cf_chl_opt={cvId: '3',cZone: 'www.example.pl',cType: 'managed'};var cpo=document.createElement('script');cpo.src='/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1?ray=8f1a2b3c4d5e6f70';document.getElementsByTagName('head')[0].appendChild(cpo);}());</script>
+</body></html>`)
+	if !isBotChallenge(body) {
+		t.Fatal("Cloudflare's managed challenge must be detected regardless of language")
+	}
+}
+
+func TestShouldRenderFallbackOnDroppedConnection(t *testing.T) {
+	for _, msg := range []string{
+		`http request failed: Get "https://shop.example/p/1": read response: EOF`,
+		`http request failed: Get "https://shop.example/p/1": write request: write tcp 10.0.0.2:51514->1.2.3.4:443: write: broken pipe`,
+		`http request failed: Get "http://shop.example/p/1": read tcp 10.0.0.2:51514->1.2.3.4:80: read: connection reset by peer`,
+	} {
+		if !shouldRenderFallback(errors.New(msg)) {
+			t.Errorf("an edge dropping the connection must fall through to the next tier: %s", msg)
+		}
+	}
+	if shouldRenderFallback(errors.New(`http request failed: Get "https://shop.example/p/1": redirect blocked: private or internal address not allowed`)) {
+		t.Fatal("an SSRF-blocked redirect must stay non-retryable")
+	}
+}

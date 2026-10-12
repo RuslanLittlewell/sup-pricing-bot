@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VPS_HOST="${VPS_HOST:-87.120.196.46}"
+VPS_HOST="${VPS_HOST:-191.44.114.212}"
 VPS_USER="${VPS_USER:-root}"
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/price-checker-bot}"
 

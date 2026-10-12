@@ -21,7 +21,8 @@ func NewFirefox() *FirefoxFetcher {
 	if baseURL == "" {
 		return nil
 	}
-	return &FirefoxFetcher{baseURL: baseURL, client: &http.Client{Timeout: 40 * time.Second}}
+	// Camoufox launches a fresh browser per page and looks up its exit IP for geoip first.
+	return &FirefoxFetcher{baseURL: baseURL, client: &http.Client{Timeout: 75 * time.Second}}
 }
 
 func (f *FirefoxFetcher) Fetch(targetURL, proxy string, headers map[string]string) ([]byte, error) {
@@ -48,6 +49,12 @@ func (f *FirefoxFetcher) Fetch(targetURL, proxy string, headers map[string]strin
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
 	if err != nil {
 		return nil, fmt.Errorf("read firefox response: %w", err)
+	}
+	// Now that this is every site's last resort and not just Zara's (whose PDP check caught
+	// everything), an Akamai 403 page with no known marker must not pass as the product.
+	var upstreamStatus int
+	if _, scanErr := fmt.Sscanf(resp.Header.Get("X-Upstream-Status"), "%d", &upstreamStatus); scanErr == nil && upstreamStatus >= 400 {
+		return nil, fmt.Errorf("unexpected status code: %d", upstreamStatus)
 	}
 	if isBotChallenge(body) {
 		return nil, errBotBlocked

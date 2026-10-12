@@ -1,8 +1,7 @@
 // Package proxypool maintains a pool of scraping proxies: authenticated entries added
 // manually (see AddManual — e.g. from a paid rotating-proxy provider), periodically
-// re-checked for aliveness. It's a building block: it stores and hands out working
-// proxies — wiring an actual scrape (fetcher.go/renderer.go) to draw from it is a
-// separate, later step.
+// re-checked for aliveness. extractor.PageFetcher draws from it for its HTTP and Firefox
+// tiers, and the Chromium renderer for each domain's browser (renderer.UseProxyPool).
 package proxypool
 
 import (
@@ -31,6 +30,16 @@ type Store struct {
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
+
+// residentialSessions counts, per host, how many times the residential sticky session has
+// been rotated away from a blocked exit IP (see RotateResidentialSession). Process-wide
+// rather than per Store, because Stores are created ad hoc all over (every PageFetcher,
+// the renderer) and must all agree on which exit a host is currently on. In-memory only:
+// a process restart starting every host on a fresh session is harmless.
+var residentialSessions = struct {
+	sync.Mutex
+	gen map[string]uint32
+}{gen: map[string]uint32{}}
 
 // Proxy is one row of the pool, as surfaced to callers (admin listing). Never carries a
 // password — see PickedProxy for the form actually used to make requests.
@@ -68,6 +77,8 @@ type PickedProxy struct {
 	Address  string
 	Username string
 	Password string
+	// Protocol is the pool's protocol column ("socks5", "http", "https"); see ClientURL.
+	Protocol string
 }
 
 // URL renders the proxy as a socks5:// URL suitable for an HTTP client/renderer's proxy
@@ -85,6 +96,18 @@ func (p PickedProxy) URL() string {
 // holds, not guaranteed for every proxy in general.
 func (p PickedProxy) HTTPURL() string {
 	return p.urlWithScheme("http")
+}
+
+// ClientURL is the proxy URL to hand an HTTP client (curl-cffi). Authenticated entries
+// come from the paid provider and go through HTTPURL's CONNECT endpoint, whatever their
+// stored protocol says. Unauthenticated public SOCKS5 proxies (geonode) can't answer
+// CONNECT at all — dialing them as http:// was why that tier always failed — so they get
+// socks5h://, which also resolves the target at the proxy like a CONNECT would.
+func (p PickedProxy) ClientURL() string {
+	if p.Username == "" && p.Protocol == "socks5" {
+		return "socks5h://" + p.Address
+	}
+	return p.HTTPURL()
 }
 
 func (p PickedProxy) urlWithScheme(scheme string) string {
@@ -369,8 +392,8 @@ func (s *Store) pickByTier(ctx context.Context, tier, rawURL string) (picked Pic
 			    OR ($1 = 'non_residential' AND network_type != 'residential'))
 			ORDER BY random() LIMIT 1
 		)
-		RETURNING address, username, password, provider
-	`, tier).Scan(&picked.Address, &username, &password, &provider)
+		RETURNING address, username, password, provider, protocol
+	`, tier).Scan(&picked.Address, &username, &password, &provider, &picked.Protocol)
 	if err != nil {
 		return PickedProxy{}, false
 	}
@@ -381,32 +404,69 @@ func (s *Store) pickByTier(ctx context.Context, tier, rawURL string) (picked Pic
 		picked.Password = *password
 	}
 	if provider != nil && strings.EqualFold(*provider, "DataImpulse") && picked.Username != "" {
-		picked.Username = dataImpulseUsername(picked.Username, rawURL)
+		picked.Username = dataImpulseUsername(picked.Username, rawURL, ResidentialGeneration(rawURL))
 	}
 	return picked, true
 }
 
-func dataImpulseUsername(base, rawURL string) string {
+// RotateResidentialSession moves rawURL's host onto a new residential sticky session, so
+// the next PickResidentialForURL for it exits from a different IP. The session is sticky
+// per host on purpose (anti-bot cookies are bound to the IP that earned them), but that
+// also means once a site flags the exit IP, every later tier and every later check would
+// keep hitting it from the same burned address. Callers rotate after a residential
+// attempt fails.
+func (s *Store) RotateResidentialSession(rawURL string) {
+	host := residentialSessionHost(rawURL)
+	if host == "" {
+		return
+	}
+	residentialSessions.Lock()
+	defer residentialSessions.Unlock()
+	residentialSessions.gen[host]++
+}
+
+// ResidentialGeneration reports how many times rawURL's host has been rotated onto a new
+// residential session. A long-lived consumer that baked an exit in at startup (a browser
+// launched with --proxy-server) compares it to know when it has to relaunch.
+func ResidentialGeneration(rawURL string) uint32 {
+	residentialSessions.Lock()
+	defer residentialSessions.Unlock()
+	return residentialSessions.gen[residentialSessionHost(rawURL)]
+}
+
+func residentialSessionHost(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(parsed.Hostname())
+}
+
+func dataImpulseUsername(base, rawURL string, generation uint32) string {
 	parsed, _ := url.Parse(rawURL)
 	host := strings.ToLower(parsed.Hostname())
-	country := ""
+	// Everything outside the RU/BY storefronts exits in Poland, not a random country: the
+	// browsers present pl-PL with a Warsaw clock (renderer.timezoneFor, Camoufox's geoip),
+	// and a Polish browser arriving from, say, a Brazilian IP is an inconsistency of its
+	// own. It also keeps geo-redirecting .com shops on the Polish store between checks.
+	country := "pl"
 	switch {
 	case strings.HasSuffix(host, ".by"):
 		country = "by"
 	case strings.HasSuffix(host, ".ru"):
 		country = "ru"
-	case strings.HasSuffix(host, ".pl"):
-		country = "pl"
 	}
 	if strings.Contains(base, "__") {
 		base = strings.SplitN(base, "__", 2)[0]
 	}
-	params := ""
-	if country != "" {
-		params = "__cr." + country
-	}
+	params := "__cr." + country
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(host))
+	// Generation 0 hashes the host alone, keeping the session ids issued before rotation
+	// existed (and saved in scrape_fingerprints) unchanged.
+	if generation > 0 {
+		_, _ = fmt.Fprintf(h, "#%d", generation)
+	}
 	return fmt.Sprintf("%s%s;sessid.%x", base, params, h.Sum32())
 }
 
@@ -463,11 +523,11 @@ func (s *Store) GetFingerprint(ctx context.Context, url string) (FetchFingerprin
 	var fp FetchFingerprint
 	var proxyAddress, proxyUsername, proxyPassword *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT sf.user_agent, sf.proxy_address, sf.proxy_username, sf.proxy_password
+		SELECT sf.user_agent, sf.proxy_address, sf.proxy_username, sf.proxy_password, COALESCE(p.protocol, '')
 		FROM scrape_fingerprints sf
 		LEFT JOIN proxies p ON p.address = sf.proxy_address
 		WHERE sf.url = $1 AND (sf.proxy_address IS NULL OR p.status = 'alive')
-	`, url).Scan(&fp.UserAgent, &proxyAddress, &proxyUsername, &proxyPassword)
+	`, url).Scan(&fp.UserAgent, &proxyAddress, &proxyUsername, &proxyPassword, &fp.Proxy.Protocol)
 	if err != nil {
 		return FetchFingerprint{}, false
 	}

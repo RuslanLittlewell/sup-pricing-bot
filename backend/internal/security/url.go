@@ -12,6 +12,8 @@ var privateIPBlocks []*net.IPNet
 
 func init() {
 	for _, cidr := range []string{
+		"0.0.0.0/8",      // "this network" — 0.0.0.0 dials the local host on Linux
+		"100.64.0.0/10",  // carrier-grade NAT / Tailscale-style overlay networks
 		"127.0.0.0/8",    // loopback
 		"10.0.0.0/8",     // private
 		"172.16.0.0/12",  // private
@@ -105,7 +107,7 @@ func isPrivate(host string) bool {
 }
 
 func isPrivateIP(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() {
+	if ip.IsUnspecified() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() {
 		return true
 	}
 	for _, block := range privateIPBlocks {

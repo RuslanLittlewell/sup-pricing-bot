@@ -7,6 +7,8 @@ package useragent
 import (
 	"fmt"
 	"math/rand"
+	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -26,6 +28,20 @@ type Profile struct {
 	CDPPlatform string
 	// NavigatorPlatform is the value the navigator.platform JS property should report, e.g. "Win32".
 	NavigatorPlatform string
+	// Brands, FullVersion and CHPlatformVersion feed the renderer's User-Agent Client
+	// Hints metadata override, so Chromium itself emits Sec-CH-UA* on every request and
+	// reports the same values through navigator.userAgentData.
+	Brands            []Brand
+	FullVersion       string
+	CHPlatformVersion string
+	// Architecture is Sec-CH-UA-Arch ("x86", "arm").
+	Architecture string
+}
+
+// Brand is one entry of the Sec-CH-UA brand list.
+type Brand struct {
+	Name    string
+	Version string
 }
 
 // chromeVersions covers the last several stable Chrome releases — recent enough that a
@@ -36,8 +52,12 @@ type Profile struct {
 // of those in 2026 is itself an anomaly a modern bot-detection system flags, and none of
 // them have known Client Hints to accompany them, so a real gist import would've made the
 // mask worse, not better. Generating a larger current, internally-consistent set instead.
+//
+// Needs bumping as Chrome ships (every ~4 weeks): stable was 154 in October 2026, when
+// this list still stopped at 149. Only the uTLS fallback and the CF relay use it now —
+// curl-cffi and the renderer present their own real versions.
 var chromeVersions = []string{
-	"146.0.0.0", "147.0.0.0", "148.0.0.0", "149.0.0.0",
+	"151.0.0.0", "152.0.0.0", "153.0.0.0", "154.0.0.0",
 }
 
 type osTarget struct {
@@ -45,12 +65,16 @@ type osTarget struct {
 	secCHUAPlatform   string
 	cdpPlatform       string
 	navigatorPlatform string
+	// platformVersion is Sec-CH-UA-Platform-Version: the real OS version, which the
+	// frozen UA string no longer carries (Windows 11 reports 13+, macOS its actual
+	// release). Chromium deliberately reports it empty on Linux.
+	platformVersion string
 }
 
 var osTargets = []osTarget{
-	{uaPlatform: "Windows NT 10.0; Win64; x64", secCHUAPlatform: `"Windows"`, cdpPlatform: "Windows", navigatorPlatform: "Win32"},
-	{uaPlatform: "Macintosh; Intel Mac OS X 10_15_7", secCHUAPlatform: `"macOS"`, cdpPlatform: "macOS", navigatorPlatform: "MacIntel"},
-	{uaPlatform: "X11; Linux x86_64", secCHUAPlatform: `"Linux"`, cdpPlatform: "Linux", navigatorPlatform: "Linux x86_64"},
+	{uaPlatform: "Windows NT 10.0; Win64; x64", secCHUAPlatform: `"Windows"`, cdpPlatform: "Windows", navigatorPlatform: "Win32", platformVersion: "19.0.0"},
+	{uaPlatform: "Macintosh; Intel Mac OS X 10_15_7", secCHUAPlatform: `"macOS"`, cdpPlatform: "macOS", navigatorPlatform: "MacIntel", platformVersion: "15.6.1"},
+	{uaPlatform: "X11; Linux x86_64", secCHUAPlatform: `"Linux"`, cdpPlatform: "Linux", navigatorPlatform: "Linux x86_64", platformVersion: ""},
 }
 
 var profiles = buildProfiles()
@@ -58,19 +82,91 @@ var profiles = buildProfiles()
 func buildProfiles() []Profile {
 	var out []Profile
 	for _, version := range chromeVersions {
-		major, _, _ := strings.Cut(version, ".")
-		secCHUA := fmt.Sprintf(`"Chromium";v="%s", "Google Chrome";v="%s", "Not-A.Brand";v="99"`, major, major)
 		for _, target := range osTargets {
-			out = append(out, Profile{
-				UserAgent:         fmt.Sprintf("Mozilla/5.0 (%s) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s Safari/537.36", target.uaPlatform, version),
-				SecCHUA:           secCHUA,
-				SecCHUAPlatform:   target.secCHUAPlatform,
-				CDPPlatform:       target.cdpPlatform,
-				NavigatorPlatform: target.navigatorPlatform,
-			})
+			out = append(out, newProfile(version, "Google Chrome", target))
 		}
 	}
 	return out
+}
+
+func newProfile(fullVersion, product string, target osTarget) Profile {
+	majorText, _, _ := strings.Cut(fullVersion, ".")
+	major, _ := strconv.Atoi(majorText)
+	brands := brandList(major, product)
+	quoted := make([]string, len(brands))
+	for i, b := range brands {
+		quoted[i] = fmt.Sprintf(`"%s";v="%s"`, b.Name, b.Version)
+	}
+	return Profile{
+		// The UA string carries only the major version (UA reduction); the full one is
+		// left to the high-entropy client hints, as in a real Chrome.
+		UserAgent:         fmt.Sprintf("Mozilla/5.0 (%s) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%d.0.0.0 Safari/537.36", target.uaPlatform, major),
+		SecCHUA:           strings.Join(quoted, ", "),
+		SecCHUAPlatform:   target.secCHUAPlatform,
+		CDPPlatform:       target.cdpPlatform,
+		NavigatorPlatform: target.navigatorPlatform,
+		Brands:            brands,
+		FullVersion:       fullVersion,
+		CHPlatformVersion: target.platformVersion,
+		Architecture:      "x86",
+	}
+}
+
+// brandList reproduces Chromium's GenerateBrandVersionList
+// (components/embedder_support/user_agent_utils.cc): the GREASE brand's punctuation and
+// version, and the order of the whole list, are all derived from the major version. A
+// fixed `"Not-A.Brand";v="99"` is only what some versions send (124 did; 146 sends v="24"),
+// so hardcoding one is a mismatch any server holding a version table can spot. product is
+// the browser brand — "Google Chrome", or "" for an unbranded Chromium build.
+func brandList(major int, product string) []Brand {
+	greaseChars := []string{" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"}
+	greaseVersions := []string{"8", "99", "24"}
+	version := strconv.Itoa(major)
+	list := []Brand{
+		{"Not" + greaseChars[major%len(greaseChars)] + "A" + greaseChars[(major+1)%len(greaseChars)] + "Brand", greaseVersions[major%len(greaseVersions)]},
+		{"Chromium", version},
+	}
+	if product != "" {
+		list = append(list, Brand{product, version})
+	}
+	var order []int
+	if len(list) == 2 {
+		order = []int{major % 2, (major + 1) % 2}
+	} else {
+		orders := [][]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}
+		order = orders[major%len(orders)]
+	}
+	shuffled := make([]Brand, len(list))
+	for i, b := range list {
+		shuffled[order[i]] = b
+	}
+	return shuffled
+}
+
+// Native describes the browser actually running here — fullVersion and product as the
+// binary reports them (see renderer's version probe), platform from the host OS — for the
+// renderer, which drives a real Chromium. Claiming Windows from a Linux box is a lie the
+// page can catch through WebGL, fonts and timing; Camoufox spoofs those at the engine
+// level, CDP overrides can't. Unknown OSes fall back to Linux, the deployment target.
+func Native(fullVersion, product string) Profile {
+	target := osTargets[2]
+	switch runtime.GOOS {
+	case "windows":
+		target = osTargets[0]
+	case "darwin":
+		target = osTargets[1]
+	}
+	profile := newProfile(fullVersion, product, target)
+	if runtime.GOARCH == "arm64" {
+		profile.Architecture = "arm"
+	}
+	return profile
+}
+
+// Latest is the newest version in the pool, for when the real browser version can't be
+// determined.
+func Latest() string {
+	return chromeVersions[len(chromeVersions)-1]
 }
 
 // Random returns one of the pool of browser fingerprint profiles, picked uniformly at

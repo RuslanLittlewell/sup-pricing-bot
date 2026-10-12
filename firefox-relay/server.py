@@ -1,15 +1,22 @@
 import ipaddress
 import json
+import os
 import socket
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
-from playwright.sync_api import sync_playwright
+from camoufox.sync_api import Camoufox
 
 
 MAX_REQUEST = 64 * 1024
 MAX_BODY = 5 * 1024 * 1024
 TIMEOUT_MS = 30_000
+# Every render is a whole browser plus its Xvfb (several hundred MB). This is the
+# fallback of last resort for every site now, so bound how many run at once rather than
+# let a burst of blocked checks take the VPS down; the rest wait their turn. One fits the
+# current 2 GB VPS next to the Chromium sessions.
+render_slots = threading.BoundedSemaphore(int(os.environ.get("MAX_CONCURRENT_RENDERS", "1")))
 
 
 def validate_public_url(raw_url: str, cache=None) -> str:
@@ -53,7 +60,7 @@ def cookie_list(cookie_header: str, target: str):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "firefox-relay"
+    server_version = "camoufox-relay"
 
     def log_message(self, *_args):
         return
@@ -76,20 +83,29 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("invalid request size")
             payload = json.loads(self.rfile.read(length))
             target = validate_public_url(str(payload.get("url", "")))
-            headers = payload.get("headers") or {}
-            headers = {str(k): str(v) for k, v in headers.items() if str(k).lower() not in {"host", "content-length", "cookie"}}
             proxy = proxy_settings(str(payload.get("proxy", "")).strip())
             cookie_header = str((payload.get("headers") or {}).get("Cookie", ""))
             validated_hosts = set()
 
-            with sync_playwright() as playwright:
-                browser = playwright.firefox.launch(headless=True, proxy=proxy)
-                context = browser.new_context(
-                    locale="pl-PL",
-                    timezone_id="Europe/Warsaw",
-                    viewport={"width": 1920, "height": 1080},
-                    extra_http_headers=headers,
-                )
+            # Other caller headers are deliberately dropped: Camoufox derives Accept-Language
+            # from its locale and must own the rest, and Playwright's extra headers would
+            # stamp document headers onto every subresource.
+            with render_slots, Camoufox(
+                # Xvfb rather than headless mode, which still differs from a real window.
+                headless="virtual",
+                proxy=proxy,
+                # Timezone, geolocation and the WebRTC-reported IP follow the exit IP
+                # (looked up through the proxy), so they agree with where requests come from.
+                geoip=True,
+                locale="pl-PL",
+                # A fresh, internally consistent desktop fingerprint per launch. Each render
+                # is a new browser with no stored anti-bot cookies, so nothing ties it to the
+                # previous one.
+                os=["windows", "macos"],
+            ) as browser:
+                # No viewport/locale/UA arguments here: they would override the generated
+                # fingerprint with values that no longer match it.
+                context = browser.new_context()
                 if cookie_header:
                     context.add_cookies(cookie_list(cookie_header, target))
                 page = context.new_page()
@@ -108,7 +124,6 @@ class Handler(BaseHTTPRequestHandler):
                 body = page.content().encode("utf-8")[:MAX_BODY]
                 status = response.status if response else 0
                 context.close()
-                browser.close()
 
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
