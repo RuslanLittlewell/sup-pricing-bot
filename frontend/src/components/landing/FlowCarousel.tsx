@@ -40,6 +40,8 @@ export default function FlowCarousel({ slides, variant = "dark" }: Props) {
                 <img
                   src={src}
                   alt={`SurPrice Bot step ${i + 1}`}
+                  width={710}
+                  height={1398}
                   loading={i === 0 ? "eager" : "lazy"}
                   decoding="async"
                   className="h-[500px] w-auto object-cover mx-auto"

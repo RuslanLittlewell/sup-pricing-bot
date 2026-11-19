@@ -1,4 +1,6 @@
 ---
+import { useAstroTranslations } from "@/i18n";
+
 interface Props {
   i18nKey: string;
   text: string;
@@ -19,6 +21,8 @@ const {
   inline = false,
   class: className = "",
 } = Astro.props;
+
+const { t } = useAstroTranslations(Astro.url);
 
 const isDark = !color && variant === "dark";
 const dotBg = color ? "" : isDark ? "bg-white" : "bg-[#049fff]";
@@ -49,8 +53,7 @@ const inlineText = color ? `color:${color};` : "";
     ></span>
   </span>
   <span
-    data-i18n={i18nKey}
     class={`text-sm font-medium ${textCls}`}
     style={inlineText}
-  >{text}</span>
+  >{t(i18nKey, text)}</span>
 </div>

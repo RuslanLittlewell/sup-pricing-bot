@@ -1,9 +1,12 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import FuzzyText from "../components/text/FuzzyText.tsx";
+import { useAstroTranslations } from "@/i18n";
+
+const { t } = useAstroTranslations(Astro.url);
 ---
 
-<Layout title="404 — SurPrice Bot">
+<Layout title="404 — SurPrice Bot" noindex>
   <section class="relative flex min-h-screen items-center overflow-hidden bg-white px-6">
     <div class="container relative z-10 mx-auto max-w-2xl px-6 py-24 text-center">
       <div class="flex justify-center">
@@ -16,17 +19,17 @@ import FuzzyText from "../components/text/FuzzyText.tsx";
           baseIntensity={0.15}
         />
       </div>
-      <h1 data-i18n="notfound.title" class="mt-4 text-2xl font-bold text-slate-900 sm:text-3xl">
-        Page not found
+      <h1 class="mt-4 text-2xl font-bold text-slate-900 sm:text-3xl">
+        {t("notfound.title")}
       </h1>
-      <p data-i18n="notfound.subtitle" class="mt-4 text-lg text-slate-500">
-        The page you're looking for doesn't exist or was moved.
+      <p class="mt-4 text-lg text-slate-500">
+        {t("notfound.subtitle")}
       </p>
       <a
         href="/"
         class="mt-8 inline-flex h-12 items-center justify-center rounded-xl bg-gradient-to-r from-[#6A5AF9] to-[#049fff] px-8 text-sm font-bold text-white shadow-lg transition-all duration-300 hover:scale-[1.02] hover:opacity-90"
       >
-        <span data-i18n="notfound.cta">Back to home</span>
+        <span>{t("notfound.cta")}</span>
       </a>
     </div>
 

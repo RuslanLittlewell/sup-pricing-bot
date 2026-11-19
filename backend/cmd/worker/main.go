@@ -93,6 +93,9 @@ func main() {
 	go runProxyPoolRefresher(ctx, pool, log)
 	go runGeonodeFetcher(ctx, pool, log)
 	go runTrialExpiry(ctx, pool, log)
+	go rend.RunProfileJanitor(ctx, func(ctx context.Context) ([]string, error) {
+		return db.ActiveTrackerURLs(ctx, pool)
+	}, log)
 
 	for {
 		select {

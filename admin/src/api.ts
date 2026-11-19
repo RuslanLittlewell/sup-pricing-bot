@@ -278,6 +278,35 @@ export async function deleteDeadProxies(creds: Credentials): Promise<{ removed: 
   return res.json()
 }
 
+// recheckTracker queues a problem tracker for the worker's next tick. It returns the
+// tracker's last_checked_at as of queueing, so the caller can tell when the worker has
+// actually run the check (that value changes, or the tracker leaves the problem list).
+export async function recheckTracker(
+  creds: Credentials,
+  id: string,
+): Promise<{ lastCheckedAt: string }> {
+  const res = await fetch(`${API_URL}/api/admin/trackers/${encodeURIComponent(id)}/recheck`, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Basic ' + btoa(`${creds.username}:${creds.password}`),
+    },
+  })
+  if (res.status === 401) {
+    throw new UnauthorizedError('Invalid username or password')
+  }
+  if (!res.ok) {
+    let msg = `POST /api/admin/trackers/${id}/recheck failed: ${res.status}`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) msg = body.error
+    } catch {
+      // response had no JSON error body; keep the generic status message
+    }
+    throw new Error(msg)
+  }
+  return res.json()
+}
+
 export function deleteFailedTracker(
   creds: Credentials,
   item: Pick<FailedTracker, 'id' | 'kind'>,

@@ -1,8 +1,11 @@
 ---
 import CompaniesSlider from "../shared/CompaniesSlider.astro";
 import FaqAccordion from "./FaqAccordion.tsx";
+import { useAstroTranslations } from "@/i18n";
 
-const faqs = [
+const { t } = useAstroTranslations(Astro.url);
+
+const faqSource = [
   {
     qKey: "faq.q1",
     q: "How do I track a product's price?",
@@ -41,6 +44,13 @@ const faqs = [
   },
 ];
 
+// Translated on the server so both the visible answers and the FAQPage markup
+// match the page language.
+const faqs = faqSource.map((item) => ({
+  q: t(item.qKey, item.q),
+  a: t(item.aKey, item.a),
+}));
+
 const faqJsonLd = {
   "@context": "https://schema.org",
   "@type": "FAQPage",
@@ -61,11 +71,8 @@ const faqJsonLd = {
     <CompaniesSlider />
   </div>
   <div class="container mx-auto max-w-3xl px-6">
-    <h2
-      data-i18n="faq.title"
-      class="mb-10 text-center text-3xl font-bold text-slate-900 md:text-5xl"
-    >
-      F.A.Q
+    <h2 class="mb-10 text-center text-3xl font-bold text-slate-900 md:text-5xl">
+      {t("faq.title")}
     </h2>
 
     <FaqAccordion items={faqs} client:load />

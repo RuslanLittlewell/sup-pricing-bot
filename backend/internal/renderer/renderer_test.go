@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -148,5 +149,83 @@ func TestRotationRelaunchesBrowserOnNewExit(t *testing.T) {
 	proxypool.NewStore(nil).RotateResidentialSession(page)
 	if !r.rotatedSince(session, page) {
 		t.Fatal("after rotation the browser still holds the burned exit and must relaunch")
+	}
+}
+
+func TestPruneProfilesRemovesOnlyIdleUntrackedHosts(t *testing.T) {
+	root := t.TempDir()
+	old := time.Now().Add(-3 * ProfilePruneInterval)
+	mkProfile := func(rel string, modTime time.Time) string {
+		dir := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Join(dir, "Default"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "Default", "Cookies"), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(dir, modTime, modTime); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	gone := mkProfile("gone.example", old)
+	tracked := mkProfile("tracked.example", old)
+	recent := mkProfile("recent.example", time.Now())
+	warm := mkProfile("warm.example", old)
+	busy := mkProfile("busy.example", old)
+	legacyGone := mkProfile(filepath.Join("legacy", "gone.zara.example"), old)
+	legacyTracked := mkProfile(filepath.Join("legacy", "www.zara.com"), old)
+	// The legacy container itself is old and untracked, but it is not a host profile.
+	if err := os.Chtimes(filepath.Join(root, "legacy"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(stray, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	warmCtx, warmCancel := context.WithCancel(context.Background())
+	defer warmCancel()
+	busyLock := &sync.Mutex{}
+	busyLock.Lock() // a render in progress holds the host lock
+	defer busyLock.Unlock()
+	r := &Renderer{
+		profileRoot:  root,
+		profileLocks: map[string]*sync.Mutex{"busy.example": busyLock},
+		sessions:     map[string]*browserSession{"warm.example": {ctx: warmCtx, cancel: warmCancel}},
+	}
+	trackedKey, _ := ProfileKey("https://tracked.example/p/1?x=2")
+	zaraKey, _ := ProfileKey("https://www.zara.com/pl/en/x.html")
+
+	removed, err := r.PruneProfiles(map[string]bool{trackedKey: true, zaraKey: true}, ProfilePruneInterval)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]bool{"gone.example": true, filepath.Join("legacy", "gone.zara.example"): true}
+	if len(removed) != len(want) {
+		t.Fatalf("removed %v, want %v", removed, want)
+	}
+	for _, name := range removed {
+		if !want[name] {
+			t.Fatalf("removed %v, want %v", removed, want)
+		}
+	}
+	for _, dir := range []string{gone, legacyGone} {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("%s should have been deleted", dir)
+		}
+	}
+	for _, path := range []string{tracked, recent, warm, busy, legacyTracked, stray} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("%s must be kept: %v", path, err)
+		}
+	}
+}
+
+func TestPruneProfilesWithoutLegacyDir(t *testing.T) {
+	r := &Renderer{profileRoot: t.TempDir(), profileLocks: map[string]*sync.Mutex{}, sessions: map[string]*browserSession{}}
+	if removed, err := r.PruneProfiles(nil, time.Hour); err != nil || len(removed) != 0 {
+		t.Fatalf("removed=%v err=%v", removed, err)
 	}
 }

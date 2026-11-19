@@ -3,7 +3,11 @@
     "allow": [
       "WebFetch(domain:www.zara.com)",
       "WebFetch(domain:www2.hm.com)",
-      "WebFetch(domain:plugins.trac.wordpress.org)"
+      "WebFetch(domain:plugins.trac.wordpress.org)",
+      "ClaudeInChromeDomain(surpricebot.com)",
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "ClaudeInChromeDomain(localhost:3000)",
+      "mcp__claude-in-chrome__tabs_create_mcp"
     ]
   }
 }

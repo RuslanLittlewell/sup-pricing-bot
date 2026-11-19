@@ -99,6 +99,14 @@ func main() {
 	if err := db.RunMigrations(ctx, pool, log); err != nil {
 		log.Fatal().Err(err).Msg("failed to run migrations")
 	}
+
+	// The API has its own profile namespace (it renders pages while a user adds a tracker),
+	// so it cleans up after itself the same way the worker does.
+	janitorCtx, stopJanitor := context.WithCancel(context.Background())
+	defer stopJanitor()
+	go rend.RunProfileJanitor(janitorCtx, func(ctx context.Context) ([]string, error) {
+		return db.ActiveTrackerURLs(ctx, pool)
+	}, log)
 	// Renders go out through each domain's residential exit, like the HTTP tiers.
 	rend.UseProxyPool(proxypool.NewStore(pool))
 	pageFetcher := extractor.NewPageFetcher(rend, cfg.ScraperCookies, cfg.ScraperProxy, proxypool.NewStore(pool))
@@ -133,6 +141,7 @@ func main() {
 			r.Get("/trackers", handler.AdminTrackers(pool, log))
 			r.Get("/status", handler.AdminStatus(pool, log))
 			r.Delete("/trackers/failed/{kind}/{id}", handler.AdminDeleteFailedTracker(pool, log))
+			r.Post("/trackers/{id}/recheck", handler.AdminRecheckTracker(pool, log))
 			r.Get("/proxies", handler.AdminProxies(pool, log))
 			r.Post("/proxies", handler.AdminAddProxies(pool, log))
 			r.Post("/proxies/{id}/check", handler.AdminCheckProxy(pool, log))
