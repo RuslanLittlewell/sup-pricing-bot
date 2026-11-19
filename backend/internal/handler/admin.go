@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
@@ -176,7 +178,7 @@ func AdminCors() func(http.Handler) http.Handler {
 			if isLocalOrigin(origin) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-				w.Header().Set("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			}
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
@@ -651,6 +653,57 @@ func AdminDeleteFailedTracker(pool *pgxpool.Pool, log zerolog.Logger) http.Handl
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":true,"deleted":` + strconv.FormatInt(tag.RowsAffected(), 10) + `}`))
+	}
+}
+
+// AdminRecheckTracker queues a Problem-trackers entry for the worker's next tick: it is
+// put back to 'active' (three failures park it in needs_confirmation, which the worker
+// skips) with a clean error count, and made due now. The check itself still runs in the
+// worker, where the extraction logic lives; the dashboard polls the problem list to see
+// how it went — a recovered tracker drops off it, a failed one comes back with a new
+// last_checked_at.
+//
+// Deliberately not a manual check (manual_check_pending): that path reports the outcome
+// to the tracker's owner, who never asked for this one. Trackers the owner paused or
+// deleted, or that expired with a trial, are refused rather than silently revived.
+func AdminRecheckTracker(pool *pgxpool.Pool, log zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			http.Error(w, `{"error":"missing id"}`, http.StatusBadRequest)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+
+		var lastCheckedAt string
+		err := pool.QueryRow(ctx, `
+			UPDATE trackers
+			SET status = 'active', consecutive_errors = 0, next_check_at = now(), updated_at = now()
+			WHERE id = $1 AND status IN ('active', 'needs_confirmation')
+			RETURNING COALESCE(last_checked_at::text, '')
+		`, id).Scan(&lastCheckedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			var status string
+			if statusErr := pool.QueryRow(ctx, `SELECT status FROM trackers WHERE id = $1`, id).Scan(&status); statusErr != nil {
+				http.Error(w, `{"error":"tracker not found"}`, http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "tracker is " + status + ", not rechecking it"})
+			return
+		}
+		if err != nil {
+			log.Error().Err(err).Str("id", id).Msg("failed to queue tracker recheck")
+			http.Error(w, `{"error":"failed to queue recheck"}`, http.StatusInternalServerError)
+			return
+		}
+
+		log.Info().Str("tracker_id", id).Msg("admin queued tracker recheck")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "lastCheckedAt": lastCheckedAt})
 	}
 }
 

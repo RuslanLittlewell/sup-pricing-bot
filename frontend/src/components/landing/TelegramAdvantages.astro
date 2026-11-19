@@ -1,5 +1,8 @@
 ---
 import EyebrowLabel from "../shared/EyebrowLabel.astro";
+import { useAstroTranslations } from "@/i18n";
+
+const { t } = useAstroTranslations(Astro.url);
 
 const points = [
   { key: "telegram.point1", text: "Never miss a price drop" },
@@ -16,13 +19,12 @@ const points = [
       <div class="max-w-xl">
         <EyebrowLabel i18nKey="telegram.eyebrow" text="Why Telegram"  class="ml-0"/>
         <h2
-          data-i18n="telegram.title"
           class="text-3xl font-bold text-slate-900 md:text-5xl"
         >
-          Why a Telegram bot beats checking manually
+          {t("telegram.title")}
         </h2>
-        <p data-i18n="telegram.subtitle" class="mt-5 text-lg leading-8 text-slate-500">
-          No app to install, no tabs to keep open — alerts arrive where you already read messages.
+        <p class="mt-5 text-lg leading-8 text-slate-500">
+          {t("telegram.subtitle")}
         </p>
       </div>
 
@@ -35,8 +37,8 @@ const points = [
                   <path d="M6.4 11.2 2.8 7.6l1.13-1.13L6.4 8.93l5.67-5.67L13.2 4.4z" />
                 </svg>
               </span>
-              <span data-i18n={p.key} class="font-medium text-slate-700">
-                {p.text}
+              <span class="font-medium text-slate-700">
+                {t(p.key, p.text)}
               </span>
             </li>
           ))

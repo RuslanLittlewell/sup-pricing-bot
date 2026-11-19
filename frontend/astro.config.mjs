@@ -17,6 +17,11 @@ export default defineConfig({
     react(),
     sitemap({
       filter: (page) => !page.includes('/404'),
+      // Adds <xhtml:link hreflang> alternates linking "/", "/ru/" and "/pl/".
+      i18n: {
+        defaultLocale: 'en',
+        locales: { en: 'en', ru: 'ru', pl: 'pl' },
+      },
     }),
   ]
 });

@@ -1,0 +1,65 @@
+# SurPrice Bot
+
+> SurPrice Bot (@sur_price_bot) is a Telegram bot that tracks product prices and stock availability in online stores. You send it a product link; it checks the page on a schedule and sends you a Telegram message when the price drops or the item is back in stock. There is no app or browser extension to install. Free plan available.
+
+- Website: https://surpricebot.com (English), https://surpricebot.com/ru/ (Russian), https://surpricebot.com/pl/ (Polish)
+- Open the bot in Telegram: https://t.me/sur_price_bot
+- Languages: English, Russian, Polish
+- Category: price tracker, price drop alerts, back-in-stock alerts, Telegram bot
+
+## How it works
+
+1. Send a link to any product page to @sur_price_bot in Telegram.
+2. The bot reads the page, saves the current price and starts checking it on a schedule.
+3. The bot sends a screenshot of the page so you can confirm it is tracking the right price.
+4. You get a Telegram message as soon as the price drops or the product is back in stock, and buy at the right moment.
+
+## Plans
+
+- Free: up to 3 tracked products, each checked every 5 hours.
+- Basic: up to 10 tracked products, checked every 2.5 hours.
+- Pro: up to 25 tracked products, checked every hour.
+- Trial: Basic features free for 14 days.
+
+Paid plans are bought inside the Telegram bot. The plan sets how often trackers are checked; there is nothing to configure.
+
+## Features
+
+- Price drop alerts, with the option to be notified only when the item gets cheaper
+- Availability monitoring: in stock, sold out, back in stock
+- Screenshot confirmation of the tracked price
+- Track several products at once
+- Competitor price monitoring for online sellers
+- Works in Telegram on any device
+
+## Supported stores
+
+SurPrice Bot works with online stores and marketplace listings where the price is shown on the product page. Stores it works with include Zara, Massimo Dutti, Stradivarius, Mango, Zalando, About You, Reserved, House, Cropp, Sinsay, Nike, Cartier, Swatch, Strauss, Empik, Lamoda, Onliner.by and Wakacje.pl.
+
+Some sites change their page structure, limit automated checks or temporarily hide the price. In these cases the bot may ask you to refresh the tracker, re-add the link or enter the price manually.
+
+## Who it is for
+
+- Tech and electronics shoppers waiting for a lower price on laptops, smartphones or headphones
+- Deal hunters tracking a wishlist for sales and promotions
+- Parents buying kids' products, toys, clothing and diapers at a discount
+- Marketplace sellers monitoring competitors' prices
+- Resellers looking for profitable price drops
+- Travelers buying luggage, gadgets and gear on a budget
+
+## FAQ
+
+- How do I track a product's price? Send a product link to SurPrice Bot in Telegram. It starts checking the page and tells you when the price changes.
+- Can I get notified only when the price drops? Yes. You can choose to be notified only when the item gets cheaper.
+- Can I track product availability? Yes. The bot checks whether a product is in stock, sold out, or back on sale.
+- Do I need to install an app? No. SurPrice Bot runs entirely in Telegram.
+- Can I monitor competitors' prices? Yes. Sellers and small businesses use it to track competitors' product prices.
+- Does it guarantee a discount? No. The bot tracks prices on product pages; it does not control store pricing.
+
+## На русском
+
+SurPrice Bot — бот в Telegram для отслеживания цен на товары, скидок и наличия в интернет-магазинах. Отправьте боту ссылку на товар — он будет проверять страницу по расписанию и пришлёт уведомление в Telegram, когда цена снизится или товар снова появится в наличии. Есть бесплатный тариф. Сайт: https://surpricebot.com/ru/ · Бот: https://t.me/sur_price_bot
+
+## Po polsku
+
+SurPrice Bot to bot w Telegramie do śledzenia cen produktów, promocji i dostępności w sklepach internetowych. Wyślij botowi link do produktu — będzie sprawdzał stronę według harmonogramu i wyśle powiadomienie w Telegramie, gdy cena spadnie lub produkt wróci do sprzedaży. Dostępny jest darmowy plan. Strona: https://surpricebot.com/pl/ · Bot: https://t.me/sur_price_bot

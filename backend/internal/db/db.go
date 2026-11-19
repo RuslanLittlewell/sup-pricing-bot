@@ -33,3 +33,22 @@ func ConnectPool(ctx context.Context, databaseURL string, logger zerolog.Logger)
 	logger.Info().Msg("connected to database")
 	return pool, nil
 }
+
+// ActiveTrackerURLs lists the URLs of every tracker the worker still checks. The renderer's
+// profile janitor uses it to decide which hosts' browser profiles are still worth keeping.
+func ActiveTrackerURLs(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	rows, err := pool.Query(ctx, `SELECT DISTINCT url FROM trackers WHERE status = 'active'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var urls []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, err
+		}
+		urls = append(urls, u)
+	}
+	return urls, rows.Err()
+}

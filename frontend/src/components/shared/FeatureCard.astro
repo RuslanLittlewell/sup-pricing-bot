@@ -1,4 +1,6 @@
 ---
+import { useAstroTranslations } from "@/i18n";
+
 interface Props {
   titleKey: string;
   title: string;
@@ -24,6 +26,10 @@ const {
   badge,
   badgeClass,
 } = Astro.props;
+
+const { t } = useAstroTranslations(Astro.url);
+const titleText = t(titleKey, title);
+const bodyText = text && textKey ? t(textKey, text) : text;
 
 const isLight = variant === "light";
 const isRow = layout === "row";
@@ -60,11 +66,11 @@ const titleColorClass = isRow
     )
   }
   <div>
-    <h3 data-i18n={titleKey} class={`${titleSizeClass} ${titleColorClass}`}>{title}</h3>
+    <h3 class={`${titleSizeClass} ${titleColorClass}`}>{titleText}</h3>
     {
-      text && (
-        <p data-i18n={textKey} class={`text-sm leading-6 ${isLight ? "text-slate-500" : "text-white/85"}`}>
-          {text}
+      bodyText && (
+        <p class={`text-sm leading-6 ${isLight ? "text-slate-500" : "text-white/85"}`}>
+          {bodyText}
         </p>
       )
     }

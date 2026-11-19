@@ -3,6 +3,9 @@ import EyebrowLabel from "../shared/EyebrowLabel.astro";
 import FeatureCard from "../shared/FeatureCard.astro";
 import LightRays from "../shared/LightRays.astro";
 import AnimatedList from "../shared/AnimatedList.tsx";
+import { useAstroTranslations } from "@/i18n";
+
+const { t } = useAstroTranslations(Astro.url);
 
 const items = [
   { key: "whattotrack.item1", text: "Smartphones, laptops, headphones and home electronics" },
@@ -49,17 +52,11 @@ const stores = [
     <div class="grid items-start gap-12 lg:grid-cols-[1fr_320px]">
       <div>
         <EyebrowLabel i18nKey="whattotrack.eyebrow" text="Coverage" variant="dark" class="ml-0" />
-        <h2
-          data-i18n="whattotrack.title"
-          class="text-3xl font-bold text-white md:text-5xl text-balance"
-        >
-          What you can track
+        <h2 class="text-3xl font-bold text-white md:text-5xl text-balance">
+          {t("whattotrack.title")}
         </h2>
-        <p
-          data-i18n="whattotrack.subtitle"
-          class="mt-5 text-lg text-white/85"
-        >
-          SurPrice Bot fits any product whose price changes often.
+        <p class="mt-5 text-lg text-white/85">
+          {t("whattotrack.subtitle")}
         </p>
 
         <div class="mt-8 grid gap-3 sm:grid-cols-2">
@@ -84,11 +81,8 @@ const stores = [
       </div>
 
       <div>
-        <p
-          data-i18n="whattotrack.storesLabel"
-          class="text-center text-sm font-semibold uppercase tracking-wide text-white/70 lg:text-left"
-        >
-          Works with popular stores
+        <p class="text-center text-sm font-semibold uppercase tracking-wide text-white/70 lg:text-left">
+          {t("whattotrack.storesLabel")}
         </p>
         <div class="mt-4 rounded-3xl border border-white/15 bg-white/10 p-4 shadow-xl">
           <AnimatedList

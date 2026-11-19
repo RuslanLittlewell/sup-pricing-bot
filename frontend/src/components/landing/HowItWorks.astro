@@ -3,13 +3,16 @@ import ShapeGrid from "../backgrounds/ShapeGrid";
 import EyebrowLabel from "../shared/EyebrowLabel.astro";
 import FeatureCard from "../shared/FeatureCard.astro";
 import FlowCarousel from "./FlowCarousel.tsx";
+import { useAstroTranslations } from "@/i18n";
+
+const { t } = useAstroTranslations(Astro.url);
 
 const slides = [
-  "/flow/s1-portrait.png",
-  "/flow/s2-portrait.png",
-  "/flow/s3-portrait.png",
-  "/flow/s4-portrait.png",
-  "/flow/s5-portrait.png",
+  "/flow/s1-portrait.webp",
+  "/flow/s2-portrait.webp",
+  "/flow/s3-portrait.webp",
+  "/flow/s4-portrait.webp",
+  "/flow/s5-portrait.webp",
 ];
 
 const steps = [
@@ -61,14 +64,11 @@ const steps = [
   
   <div class="container mx-auto px-6">
     <div class="mx-auto mb-16 max-w-3xl text-center text-balance">
-      <h2
-        data-i18n="howItWorks.title"
-        class="mt-3 text-3xl font-bold text-slate-900 md:text-5xl"
-      >
-        How SurPrice Bot tracks prices for you
+      <h2 class="mt-3 text-3xl font-bold text-slate-900 md:text-5xl">
+        {t("howItWorks.title")}
       </h2>
-      <p data-i18n="howItWorks.subtitle" class="mx-auto mt-5 max-w-2xl text-lg text-slate-500">
-        SurPrice Bot checks store pages for you, so you don't have to refresh them by hand.
+      <p class="mx-auto mt-5 max-w-2xl text-lg text-slate-500">
+        {t("howItWorks.subtitle")}
       </p>
     </div>
 
@@ -93,8 +93,8 @@ const steps = [
       </div>
     </div>
 
-    <p data-i18n="howItWorks.footnote" class="mx-auto mt-10 max-w-3xl text-center text-lg text-slate-400">
-      Useful for electronics, kids' products, home goods, accessories, marketplace listings and seasonal shopping.
+    <p class="mx-auto mt-10 max-w-3xl text-center text-lg text-slate-400">
+      {t("howItWorks.footnote")}
     </p>
   </div>
 </section>

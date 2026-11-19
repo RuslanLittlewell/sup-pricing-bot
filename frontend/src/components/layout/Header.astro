@@ -1,5 +1,20 @@
 ---
+import { languages, localizePath, stripLang, useAstroTranslations } from "@/i18n";
 
+const { lang, t } = useAstroTranslations(Astro.url);
+const home = localizePath(lang, "/");
+// Language links point at the same page in the other language (all pages exist in
+// every language except 404, where they fall back to that language's home page).
+const basePath = stripLang(Astro.url.pathname) || "/";
+const switchPath = basePath === "/404" || basePath === "/404/" ? "/" : basePath;
+
+const navLinks = [
+  { key: "nav.features", href: `${home}#features` },
+  { key: "nav.pricing", href: `${home}#pricing` },
+  { key: "nav.faq", href: `${home}#faq` },
+];
+const langOrder = ["ru", "pl", "en"] as const satisfies readonly (typeof languages)[number][];
+const activeLangCls = "bg-gradient-to-r from-[#6A5AF9] to-[#049fff] shadow-sm text-white";
 ---
 
 <header
@@ -7,7 +22,7 @@
 >
   <nav class="container mx-auto px-6 py-4">
     <div class="flex justify-between items-center">
-      <a class="group flex items-center" href="/" aria-label="SurPrice Bot"
+      <a class="group flex items-center" href={home} aria-label="SurPrice Bot"
         ><img
           src="/SPBLogo.svg"
           alt="SurPrice Bot"
@@ -16,42 +31,34 @@
           class="h-12 w-auto transition-transform duration-300 group-hover:scale-[1.03]"
         /> <span class="ml-5 text-2xl font-bold">Sur<span class="bg-gradient-to-r from-[#049fff] to-[#16C8BD] bg-clip-text text-transparent">Price</span> <span class="text-[#16C8BD]">Bot</span></span></a
       ><div class="hidden md:flex items-center gap-6">
-        <a
-          data-i18n="nav.features"
-          class="text-slate-600 hover:text-[#049fff] transition-colors font-medium"
-          href="/#features">Features</a
-        ><a
-          data-i18n="nav.pricing"
-          class="text-slate-600 hover:text-[#049fff] transition-colors font-medium"
-          href="/#pricing">Pricing</a
-        ><a
-          data-i18n="nav.faq"
-          class="text-slate-600 hover:text-[#049fff] transition-colors font-medium"
-          href="/#faq">FAQ</a
-        ><div class="flex items-center rounded-full border border-slate-200 bg-transparent p-1">
-          <button
-            type="button"
-            data-lang-switch="ru"
-            class="rounded-full px-3 py-1.5 text-xs font-bold text-slate-500 transition-colors"
-            >RU</button
-          ><button
-            type="button"
-            data-lang-switch="pl"
-            class="rounded-full px-3 py-1.5 text-xs font-bold text-slate-500 transition-colors"
-            >PL</button
-          ><button
-            type="button"
-            data-lang-switch="en"
-            class="rounded-full px-3 py-1.5 text-xs font-bold text-slate-500 transition-colors"
-            >EN</button
-          >
+        {
+          navLinks.map((link) => (
+            <a class="text-slate-600 hover:text-[#049fff] transition-colors font-medium" href={link.href}>
+              {t(link.key)}
+            </a>
+          ))
+        }<div class="flex items-center rounded-full border border-slate-200 bg-transparent p-1">
+          {
+            langOrder.map((l) => (
+              <a
+                href={localizePath(l, switchPath)}
+                hreflang={l}
+                lang={l}
+                data-lang-switch={l}
+                aria-current={l === lang ? "true" : undefined}
+                class={`rounded-full px-3 py-1.5 text-xs font-bold uppercase transition-colors ${l === lang ? activeLangCls : "text-slate-500"}`}
+              >
+                {l}
+              </a>
+            ))
+          }
         </div
         ><a
           href="https://t.me/sur_price_bot/chat"
           target="_blank"
           rel="noopener noreferrer"
           class="btn-primary bg-gradient-to-r from-[#6A5AF9] to-[#049fff] hover:opacity-90 text-white font-bold py-2.5 px-6 rounded-full transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-105 animate-pulse-glow"
-          ><span data-i18n="nav.cta">Start Now</span></a>
+          ><span>{t("nav.cta")}</span></a>
       </div><button
         id="mobile-menu-toggle"
         class="md:hidden p-2 text-slate-600 hover:text-[#6A5AF9] transition-colors"
@@ -73,48 +80,52 @@
       class="md:hidden overflow-hidden transition-all duration-300 max-h-0 opacity-0"
     >
       <div class="flex flex-col gap-4 py-4 border-t border-slate-200">
-        <a
-          data-i18n="nav.features"
-          class="text-slate-600 hover:text-[#6A5AF9] transition-colors font-medium py-2"
-          href="/#features">Features</a
-        ><a
-          data-i18n="nav.pricing"
-          class="text-slate-600 hover:text-[#6A5AF9] transition-colors font-medium py-2"
-          href="/#pricing">Pricing</a
-        ><a
-          data-i18n="nav.faq"
-          class="text-slate-600 hover:text-[#6A5AF9] transition-colors font-medium py-2"
-          href="/#faq">FAQ</a
-        ><div class="flex w-fit items-center rounded-full border border-slate-200 bg-transparent p-1">
-          <button
-            type="button"
-            data-lang-switch="ru"
-            class="rounded-full px-3 py-1.5 text-xs font-bold text-slate-500 transition-colors"
-            >RU</button
-          ><button
-            type="button"
-            data-lang-switch="pl"
-            class="rounded-full px-3 py-1.5 text-xs font-bold text-slate-500 transition-colors"
-            >PL</button
-          ><button
-            type="button"
-            data-lang-switch="en"
-            class="rounded-full px-3 py-1.5 text-xs font-bold text-slate-500 transition-colors"
-            >EN</button
-          >
+        {
+          navLinks.map((link) => (
+            <a class="text-slate-600 hover:text-[#6A5AF9] transition-colors font-medium py-2" href={link.href}>
+              {t(link.key)}
+            </a>
+          ))
+        }<div class="flex w-fit items-center rounded-full border border-slate-200 bg-transparent p-1">
+          {
+            langOrder.map((l) => (
+              <a
+                href={localizePath(l, switchPath)}
+                hreflang={l}
+                lang={l}
+                data-lang-switch={l}
+                aria-current={l === lang ? "true" : undefined}
+                class={`rounded-full px-3 py-1.5 text-xs font-bold uppercase transition-colors ${l === lang ? activeLangCls : "text-slate-500"}`}
+              >
+                {l}
+              </a>
+            ))
+          }
         </div
         ><a
           href="https://t.me/sur_price_bot/chat"
           target="_blank"
           rel="noopener noreferrer"
           class="btn-primary bg-gradient-to-r from-[#6A5AF9] to-[#049fff] text-white font-bold py-3 px-6 rounded-full text-center shadow-lg"
-          ><span data-i18n="nav.cta">Start Now</span></a>
+          ><span>{t("nav.cta")}</span></a>
       </div>
     </div>
   </nav>
 </header>
 
 <script>
+  // Remember an explicit language choice so the English home page can send the
+  // visitor back to their language next time (see the redirect in Layout.astro).
+  document.querySelectorAll<HTMLAnchorElement>("[data-lang-switch]").forEach((link) => {
+    link.addEventListener("click", () => {
+      try {
+        localStorage.setItem("surprice-language", link.dataset.langSwitch ?? "en");
+      } catch {
+        // Storage can be blocked (private mode); the link still navigates.
+      }
+    });
+  });
+
   const toggleBtn = document.getElementById("mobile-menu-toggle");
   const menu = document.getElementById("mobile-menu");
 

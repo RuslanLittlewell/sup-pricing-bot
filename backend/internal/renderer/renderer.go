@@ -199,6 +199,11 @@ func (r *Renderer) allocatorOptions(profileDir string, headless, loadExtension b
 		chromedp.Flag("disable-features", "VizDisplayCompositor,IsolateOrigins,site-per-process"),
 		chromedp.Flag("window-size", "1920,1080"),
 		chromedp.Flag("lang", "pl-PL"),
+		// Chromium's component updater downloads ~95 MB of its own machinery (TTS engine,
+		// CRL sets, suggestion models, a cache of the .crx files) into every profile that
+		// stays open long enough. With one profile per tracked host that was most of the
+		// profile volume, for nothing a page can observe.
+		chromedp.Flag("disable-component-update", true),
 		// The CDP override in setupRealBrowser only covers the page target; this covers
 		// workers. Same identity in both.
 		chromedp.UserAgent(r.identity.UserAgent),
@@ -272,6 +277,101 @@ func (r *Renderer) Close() {
 
 var unsafeProfileChar = regexp.MustCompile(`[^a-zA-Z0-9.-]+`)
 
+func profileKeyForHost(hostname string) string {
+	return unsafeProfileChar.ReplaceAllString(hostname, "_")
+}
+
+// ProfileKey is the name of the profile directory a render of rawURL uses, so callers can
+// tell PruneProfiles which profiles are still wanted.
+func ProfileKey(rawURL string) (string, bool) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return "", false
+	}
+	return profileKeyForHost(parsed.Hostname()), true
+}
+
+// legacyProfileDir holds the profiles of hosts rendered by the legacy headless path (see
+// acquire); it sits next to the per-host profiles and is not itself one.
+const legacyProfileDir = "legacy"
+
+// PruneProfiles deletes the browser profiles of hosts that are not in keep and that no
+// browser has been launched on for at least minIdle. A profile is created the first time a
+// host is rendered and nothing else ever removes it, so without this the volume keeps a
+// directory — tens to hundreds of MB once Chromium has warmed its caches — for every host
+// anyone ever tracked or merely tried to add.
+//
+// minIdle is what protects a host that has no tracker *yet*: the API renders a page while
+// the user is still walking through the add-tracker flow. A profile's directory mtime moves
+// on every launch (acquire clears Chromium's singleton files, Chromium recreates them).
+// Losing a profile only costs that host's cookies; the next render starts a fresh one.
+func (r *Renderer) PruneProfiles(keep map[string]bool, minIdle time.Duration) (removed []string, err error) {
+	for _, dir := range []string{r.profileRoot, filepath.Join(r.profileRoot, legacyProfileDir)} {
+		legacy := dir != r.profileRoot
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			if !os.IsNotExist(readErr) {
+				err = errors.Join(err, readErr)
+			}
+			continue
+		}
+		for _, entry := range entries {
+			key := entry.Name()
+			if !entry.IsDir() || keep[key] || (!legacy && key == legacyProfileDir) {
+				continue
+			}
+			name := key
+			if legacy {
+				name = filepath.Join(legacyProfileDir, key)
+			}
+			deleted, removeErr := r.pruneProfile(filepath.Join(dir, key), key, minIdle)
+			if removeErr != nil {
+				err = errors.Join(err, fmt.Errorf("remove profile %s: %w", name, removeErr))
+			}
+			if deleted {
+				removed = append(removed, name)
+			}
+		}
+	}
+	return removed, err
+}
+
+func (r *Renderer) pruneProfile(dir, key string, minIdle time.Duration) (bool, error) {
+	// The host lock is what acquire holds for the whole of a render, so holding it here
+	// means no Chromium is running on — or about to be launched on — this directory.
+	r.profileMu.Lock()
+	lock := r.profileLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		r.profileLocks[key] = lock
+	}
+	_, warm := r.sessions[key]
+	r.profileMu.Unlock()
+	if warm || !lock.TryLock() {
+		return false, nil
+	}
+	defer lock.Unlock()
+
+	// Re-read under the lock: a render may have finished between the listing and here.
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	r.profileMu.Lock()
+	_, warm = r.sessions[key]
+	r.profileMu.Unlock()
+	if warm || time.Since(info.ModTime()) < minIdle {
+		return false, nil
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // acquire returns the browser session for rawURL's host, launching one if needed, plus
 // the release func that must be called when done. The host's lock is held until release,
 // so a session is only ever driven by one caller at a time. Callers run r.prepare(session)
@@ -281,7 +381,7 @@ func (r *Renderer) acquire(rawURL string) (*browserSession, func(), error) {
 	if err != nil || parsed.Hostname() == "" {
 		return nil, nil, fmt.Errorf("invalid profile URL")
 	}
-	key := unsafeProfileChar.ReplaceAllString(parsed.Hostname(), "_")
+	key := profileKeyForHost(parsed.Hostname())
 	legacy := usesLegacyRenderer(parsed.Hostname())
 	persistent := r.persistent && !legacy
 	r.profileMu.Lock()

@@ -1,6 +1,9 @@
 ---
 import { Image } from "astro:assets";
 import CompaniesSlider from "../shared/CompaniesSlider.astro";
+import { useAstroTranslations } from "@/i18n";
+
+const { t } = useAstroTranslations(Astro.url);
 ---
 
 <section class="relative min-h-screen overflow-hidden bg-white">
@@ -11,18 +14,15 @@ import CompaniesSlider from "../shared/CompaniesSlider.astro";
       <div class="grid w-full items-center gap-12 lg:grid-cols-[1.2fr_0.8fr]">
         <div class="max-w-[560px] pt-8 lg:pt-0">
           <h1
-            data-i18n="hero.title"
             class="text-[44px] font-bold leading-[1] tracking-tight text-slate-900 sm:text-[58px] lg:text-[60px]"
           >
-            Never Miss a Product Price Drop
+            {t("hero.title")}
           </h1>
 
           <p
-            data-i18n="hero.subtitle"
             class="mt-7 max-w-[540px] text-[21px] leading-[1.45] text-slate-500 sm:text-[24px]"
           >
-            SurPrice Bot is your Telegram bot for tracking product prices without the
-            need to check stores manually.
+            {t("hero.subtitle")}
           </p>
 
           <div class="mt-8">
@@ -32,7 +32,7 @@ import CompaniesSlider from "../shared/CompaniesSlider.astro";
               rel="noopener noreferrer"
               class="inline-flex h-[62px] min-w-[250px] items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-[#6A5AF9] to-[#049fff] px-8 text-[22px] font-bold text-white shadow-lg transition-all duration-300 hover:scale-[1.02] hover:opacity-90 hover:shadow-xl"
             >
-              <span data-i18n="hero.cta">Try Now</span>
+              <span>{t("hero.cta")}</span>
 
               <svg
                 class="h-6 w-6"

@@ -2,6 +2,9 @@
 import EyebrowLabel from "../shared/EyebrowLabel.astro";
 import FeatureCard from "../shared/FeatureCard.astro";
 import LightRays from "../shared/LightRays.astro";
+import { useAstroTranslations } from "@/i18n";
+
+const { t } = useAstroTranslations(Astro.url);
 
 const cards = [
   {
@@ -52,19 +55,12 @@ const cards = [
   <div class="container relative z-10 mx-auto px-6">
     <div class="mx-auto max-w-4xl text-center">
       <EyebrowLabel i18nKey="info.eyebrow" text="Price tracking via Telegram" variant="dark" class="ml-auto" />
-      <h2
-        data-i18n="info.title"
-        class="mb-4 text-3xl font-bold text-white md:text-5xl"
-      >
-        Track product prices across online stores automatically
+      <h2 class="mb-4 text-3xl font-bold text-white md:text-5xl">
+        {t("info.title")}
       </h2>
 
-      <p
-        data-i18n="info.description"
-        class="mx-auto mb-10 max-w-3xl text-lg leading-8 text-white/90"
-      >
-        SurPrice Bot monitors product pages, detects price and availability changes,
-        and sends Telegram alerts when it is time to buy.
+      <p class="mx-auto mb-10 max-w-3xl text-lg leading-8 text-white/90">
+        {t("info.description")}
       </p>
 
       <div class="grid gap-4 text-left md:grid-cols-3">

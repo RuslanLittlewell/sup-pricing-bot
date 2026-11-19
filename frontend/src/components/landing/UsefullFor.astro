@@ -1,12 +1,15 @@
 ---
 import EyebrowLabel from "@/components/shared/EyebrowLabel.astro";
 import ShapeGrid from "@/components/backgrounds/ShapeGrid";
+import { useAstroTranslations } from "@/i18n";
+
+const { t } = useAstroTranslations(Astro.url);
 const botUrl = "https://t.me/sur_price_bot/chat";
 
 const categories = [
   {
     title: "Tech & Electronics Shoppers",
-    icon: "/images/tech.png",
+    icon: "/images/tech.webp",
     alt: "Tech and electronics",
     accent: "#04a1fc",
     headline: "Get the best price on gadgets",
@@ -17,7 +20,7 @@ const categories = [
   },
   {
     title: "Deal Hunters",
-    icon: "/images/shops.png",
+    icon: "/images/shops.webp",
     alt: "Deals and sales",
     accent: "#09aee7",
     headline: "Never miss a sale again",
@@ -28,7 +31,7 @@ const categories = [
   },
   {
     title: "Parents",
-    icon: "/images/childs.png",
+    icon: "/images/childs.webp",
     alt: "Children products",
     accent: "#11b2e0",
     headline: "Buy kids' stuff for less",
@@ -39,7 +42,7 @@ const categories = [
   },
   {
     title: "Marketplace Sellers",
-    icon: "/images/marketplaces.png",
+    icon: "/images/marketplaces.webp",
     alt: "Marketplaces",
     accent: "#0ebad4",
     headline: "Keep prices in check",
@@ -49,7 +52,7 @@ const categories = [
   },
   {
     title: "Resellers & Arbitrageurs",
-    icon: "/images/resail.png",
+    icon: "/images/resail.webp",
     alt: "Resale",
     accent: "#13c3c4",
     headline: "Find profitable deals first",
@@ -60,7 +63,7 @@ const categories = [
   },
   {
     title: "Travelers",
-    icon: "/images/travel.png",
+    icon: "/images/travel.webp",
     alt: "Travel",
     accent: "#16c8bd",
     headline: "Pack your trip on a budget",
@@ -87,20 +90,11 @@ const categories = [
   <div class="container px-6">
     <div class="relative z-10 mb-16 text-center text-balance lg:mb-24">
       <h2
-        data-i18n-html="usefulfor.titleHtml"
         class="mx-auto max-w-4xl text-3xl font-bold text-slate-900 md:text-5xl lg:text-6xl"
-      >
-        Who Sur<span
-          class="bg-gradient-to-r from-[#049fff] to-[#16C8BD] bg-clip-text text-transparent"
-          >Price</span
-        >
-        <span class="text-[#16C8BD]">Bot</span> Is For
-      </h2>
-      <p
-        data-i18n="usefulfor.subtitle"
-        class="mx-auto mt-5 max-w-2xl text-lg text-slate-500"
-      >
-        One bot that saves money on everyday tasks
+        set:html={t("usefulfor.titleHtml")}
+      />
+      <p class="mx-auto mt-5 max-w-2xl text-lg text-slate-500">
+        {t("usefulfor.subtitle")}
       </p>
     </div>
 
@@ -112,7 +106,15 @@ const categories = [
             style={`border-color:${c.accent}`}
           >
             <div class="relative isolate flex items-center justify-center md:aspect-square">
-              <img src={c.icon} alt={c.alt} class="h-auto w-full" />
+              <img
+                src={c.icon}
+                alt={t(`usefulfor.cat${i + 1}.title`, c.alt)}
+                width="450"
+                height="450"
+                loading="lazy"
+                decoding="async"
+                class="h-auto w-full"
+              />
             </div>
 
             <div class="grid grid-cols-1 gap-5 p-6 text-balance md:col-span-2 md:p-8 lg:grid-cols-3">
@@ -124,19 +126,13 @@ const categories = [
                   inline
                 />
 
-                <h3
-                  data-i18n={`usefulfor.cat${i + 1}.headline`}
-                  class="text-2xl font-bold text-slate-900 xl:text-4xl"
-                >
-                  {c.headline}
+                <h3 class="text-2xl font-bold text-slate-900 xl:text-4xl">
+                  {t(`usefulfor.cat${i + 1}.headline`, c.headline)}
                 </h3>
 
                 <div class="flex flex-col gap-6 lg:mt-auto xl:flex-row xl:items-center xl:justify-between">
-                  <p
-                    data-i18n={`usefulfor.cat${i + 1}.stat`}
-                    class="text-lg font-semibold text-slate-700 xl:text-2xl"
-                  >
-                    {c.stat}
+                  <p class="text-lg font-semibold text-slate-700 xl:text-2xl">
+                    {t(`usefulfor.cat${i + 1}.stat`, c.stat)}
                   </p>
 
                   <a
@@ -146,8 +142,8 @@ const categories = [
                     class="group inline-flex w-fit shrink-0 items-center gap-4 rounded-full py-2 pl-5 pr-2 leading-none text-white transition-all hover:opacity-90 xl:self-end"
                     style={`background:${c.accent}`}
                   >
-                    <span data-i18n="usefulfor.cta" class="text-sm font-medium">
-                      Start Tracking
+                    <span class="text-sm font-medium">
+                      {t("usefulfor.cta")}
                     </span>
                     <span class="flex aspect-square w-9 items-center justify-center rounded-full bg-black/20 transition-transform group-hover:scale-110">
                       <svg
@@ -163,18 +159,15 @@ const categories = [
               </div>
 
               <div class="flex flex-col gap-4 border-t border-slate-200 pt-5 text-sm lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
-                <blockquote
-                  data-i18n={`usefulfor.cat${i + 1}.quote`}
-                  class="text-slate-600 lg:mt-auto 2xl:text-base"
-                >
-                  {c.quote}
+                <blockquote class="text-slate-600 lg:mt-auto 2xl:text-base">
+                  {t(`usefulfor.cat${i + 1}.quote`, c.quote)}
                 </blockquote>
                 <span
                   class="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium"
                   style={`background:${c.accent}1a;color:${c.accent}`}
                 >
-                  <span data-i18n={`usefulfor.cat${i + 1}.example`}>
-                    {c.example}
+                  <span>
+                    {t(`usefulfor.cat${i + 1}.example`, c.example)}
                   </span>
                 </span>
               </div>
@@ -185,20 +178,11 @@ const categories = [
     </div>
 
     <div class="relative z-10 mx-auto mt-16 max-w-3xl text-balance lg:mt-24">
-      <h3
-        data-i18n="usefulfor.seoTitle"
-        class="text-2xl font-bold text-slate-900 md:text-3xl"
-      >
-        Who a price tracking bot is useful for
+      <h3 class="text-2xl font-bold text-slate-900 md:text-3xl">
+        {t("usefulfor.seoTitle")}
       </h3>
-      <p data-i18n="usefulfor.seoText" class="mt-4 leading-7 text-slate-600">
-        SurPrice Bot is for shoppers who don't want to check store websites
-        manually every day. The bot helps you wait for the right price and get a
-        Telegram notification the moment it drops. Tech buyers can track
-        smartphones, laptops, monitors, headphones and other gadgets. Parents
-        can follow prices on kids' products, toys and clothing. Marketplace
-        sellers can monitor how competitors' prices change. Resellers can spot
-        profitable price gaps faster.
+      <p class="mt-4 leading-7 text-slate-600">
+        {t("usefulfor.seoText")}
       </p>
     </div>
   </div>
