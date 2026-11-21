@@ -12,7 +12,6 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - frontend
       - backend
 
   db:
@@ -204,29 +203,8 @@ services:
       firefox-renderer:
         condition: service_healthy
 
-  frontend:
-    build:
-      context: ../frontend
-      dockerfile: Dockerfile
-      args:
-        PUBLIC_API_URL: https://${API_DOMAIN}
-    restart: unless-stopped
-    env_file: ../.env.production
-    environment:
-      NODE_ENV: production
-      HOST: 0.0.0.0
-      PORT: "3000"
-      API_URL: http://backend:8080
-      PUBLIC_API_URL: https://${API_DOMAIN}
-      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/price_tracker?sslmode=disable
-      BETTER_AUTH_URL: https://${APP_DOMAIN}
-    ports:
-      - "127.0.0.1:${FRONTEND_HOST_PORT:-13000}:3000"
-    depends_on:
-      db:
-        condition: service_healthy
-      backend:
-        condition: service_started
+  # The landing (APP_DOMAIN) is not served from here: it is a static site on
+  # Cloudflare Pages, deployed with `npm run deploy` in frontend/.
 
   uptime-kuma:
     image: louislam/uptime-kuma:1

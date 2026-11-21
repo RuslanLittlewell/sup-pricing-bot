@@ -1,7 +1,4 @@
-{$APP_DOMAIN} {
-	reverse_proxy frontend:3000
-}
-
+# APP_DOMAIN (the landing) is served by Cloudflare Pages, not this server.
 {$API_DOMAIN} {
 	reverse_proxy backend:8080
 }
