@@ -1,0 +1,10 @@
+# Response headers for the static assets (https://developers.cloudflare.com/workers/static-assets/headers/).
+# This file itself is not served.
+
+# Astro's hashed bundles never change under the same name.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Keep the *.workers.dev copy out of search results; only surpricebot.com is indexed.
+https://:name.:subdomain.workers.dev/*
+  X-Robots-Tag: noindex

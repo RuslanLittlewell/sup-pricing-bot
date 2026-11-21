@@ -1,14 +1,12 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
-import node from '@astrojs/node';
 import react from '@astrojs/react';
 import sitemap from '@astrojs/sitemap';
 
+// Fully static build (no adapter): `dist/` is deployed as-is to Cloudflare Pages,
+// see wrangler.jsonc and the `deploy` script.
 export default defineConfig({
   site: 'https://surpricebot.com',
-  adapter: node({
-    mode: 'standalone'
-  }),
   server: {
     port: 3000,
     host: '0.0.0.0'

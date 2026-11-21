@@ -1,0 +1,23 @@
+// The landing (surpricebot.com): a fully static Astro build served by Cloudflare
+// (Pages, now Workers static assets: no Worker script, just ./dist).
+// Deploy: `npm run deploy` (astro build + wrangler deploy).
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "surpricebot",
+  "compatibility_date": "2026-11-19",
+  "assets": {
+    "directory": "./dist",
+    // Unknown paths get dist/404.html with a 404 status.
+    "not_found_handling": "404-page",
+    // /ru -> /ru/ (folder index), like the sitemap and hreflang links.
+    "html_handling": "auto-trailing-slash"
+  },
+  // A Custom Domain: Cloudflare creates and owns the apex DNS record and its certificate,
+  // so there is no placeholder record that can be deleted from under the Worker.
+  // (It refuses hostnames that already have DNS records: the old A record had to go first.)
+  "routes": [{ "pattern": "surpricebot.com", "custom_domain": true }],
+  // surpricebot.<account>.workers.dev stays reachable for checks; public/_headers
+  // marks it noindex so only surpricebot.com gets indexed.
+  "workers_dev": true,
+  "preview_urls": false
+}
